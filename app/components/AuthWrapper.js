@@ -10,16 +10,28 @@ export default function AuthWrapper() {
   const [isLoginMode, setIsLoginMode] = useState(true);
   const { user, loading } = useAuth();
 
+  useEffect(() => {
+    console.log('🎯 AuthWrapper state update:', { 
+      userEmail: user?.email, 
+      loading, 
+      isLoginMode 
+    });
+  }, [user, loading, isLoginMode]);
+
+  // Show loading spinner
   if (loading) {
+    console.log('⏳ Still loading...');
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-blue-600 to-purple-600">
-        <div className="w-16 h-16 border-4 border-white border-t-transparent rounded-full animate-spin mb-4"></div>
-        <p className="text-white text-lg font-medium">Loading...</p>
+      <div className="loading-container">
+        <div className="loading-spinner"></div>
+        <p>Loading...</p>
       </div>
     );
   }
 
+  // Show login/signup forms if not logged in
   if (!user) {
+    console.log('📝 No user, showing login form');
     return isLoginMode ? (
       <LoginForm onToggleMode={() => setIsLoginMode(false)} />
     ) : (
@@ -27,5 +39,7 @@ export default function AuthWrapper() {
     );
   }
 
+  // Show chat if logged in
+  console.log('✅ User logged in, showing chat page');
   return <Chat />;
 }
