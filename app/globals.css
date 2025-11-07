@@ -264,6 +264,8 @@ img {
     animation: typing 1s infinite;
   }
 
+  
+
   /* Bounce */
   @keyframes bounce-custom {
     0%, 100% {

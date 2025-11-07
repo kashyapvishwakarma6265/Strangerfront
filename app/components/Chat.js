@@ -19,11 +19,14 @@ export default function Chat() {
   const [strangerName, setStrangerName] = useState('Stranger');
   const [sendingMedia, setSendingMedia] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [pendingMessages, setPendingMessages] = useState(new Map()); // Track pending media messages by temp ID
+  const [isWaiting, setIsWaiting] = useState(false);
   const socketRef = useRef(null);
   const messagesEndRef = useRef(null);
   const { user, logout } = useAuth();
   const typingTimeoutRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
+  const intervalRef = useRef(null);
 
   useEffect(() => {
     if (!user) return;
@@ -31,11 +34,6 @@ export default function Chat() {
     console.log('🔌 Initializing Socket.IO with keepalive');
     socketRef.current = initSocket();
     const socket = socketRef.current;
-
-    // Increase timeout for large uploads
-    socket.io.engine.on('upgrade', (transport) => {
-      console.log('🔄 Transport upgraded to:', transport.name);
-    });
 
     socket.emit('user info', {
       userId: user.uid,
@@ -47,8 +45,8 @@ export default function Chat() {
       console.log('✅ Socket connected');
       setStatus('Connected');
       setIsConnected(true);
-      
-      // Clear any reconnect timeouts
+      setIsWaiting(false);
+
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
@@ -64,7 +62,6 @@ export default function Chat() {
       setIsConnected(false);
       setStatus('❌ Disconnected: ' + reason);
 
-      // Auto-reconnect after 2 seconds
       if (reason === 'io server disconnect') {
         reconnectTimeoutRef.current = setTimeout(() => {
           console.log('🔄 Attempting to reconnect...');
@@ -76,14 +73,15 @@ export default function Chat() {
     socket.on('waiting', (data) => {
       setStatus(data.message);
       setIsConnected(false);
+      setIsWaiting(true);
       setStrangerName('Stranger');
     });
 
     socket.on('paired', (data) => {
-      console.log('🎯 Paired in room:', data.roomId);
       setCurrentRoom(data.roomId);
       setStatus('✅ Connected to a stranger');
       setIsConnected(true);
+      setIsWaiting(false);
       setMessages([]);
       setStrangerName('Stranger');
     });
@@ -96,7 +94,7 @@ export default function Chat() {
       }
 
       setMessages(prev => [...prev, {
-        id: Date.now().toString(),
+        id: data.id || Date.now().toString(),
         text: data.message,
         type: data.type || 'text',
         mediaUrl: data.mediaUrl,
@@ -106,9 +104,43 @@ export default function Chat() {
         userName: data.userName || 'Stranger',
         timestamp: new Date(),
       }]);
-      
+
       setIsTyping(false);
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 50);
+    });
+
+    // Listen for upload acknowledgment from server for media messages
+    socket.on('media upload ack', (data) => {
+      console.log('✅ Media upload confirmed:', data);
+      const { tempId, id, mediaUrl, thumbnail, duration } = data;
+      
+      setMessages(prev => {
+        const updated = [...prev];
+        const pendingIndex = updated.findIndex(msg => msg.tempId === tempId);
+        if (pendingIndex !== -1) {
+          updated[pendingIndex] = {
+            ...updated[pendingIndex],
+            id: id || tempId,
+            mediaUrl: mediaUrl || updated[pendingIndex].mediaUrl,
+            thumbnail: thumbnail || updated[pendingIndex].thumbnail,
+            duration: duration || updated[pendingIndex].duration,
+            status: 'confirmed' // Optional: track status if needed
+          };
+        }
+        return updated;
+      });
+
+      // Remove from pending
+      setPendingMessages(prev => {
+        const newMap = new Map(prev);
+        newMap.delete(tempId);
+        return newMap;
+      });
+
+      setSendingMedia(null);
+      setUploadProgress(0);
     });
 
     socket.on('typing', (data) => {
@@ -122,11 +154,16 @@ export default function Chat() {
       setCurrentRoom(null);
       setIsTyping(false);
       setStrangerName('Stranger');
+      // Clear pending on disconnect
+      setPendingMessages(new Map());
     });
 
     return () => {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
+      }
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
       }
       socket.off('connect');
       socket.off('connect_error');
@@ -134,6 +171,7 @@ export default function Chat() {
       socket.off('waiting');
       socket.off('paired');
       socket.off('chat message');
+      socket.off('media upload ack'); // New listener cleanup
       socket.off('typing');
       socket.off('stranger left');
     };
@@ -163,7 +201,7 @@ export default function Chat() {
     }
   };
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = (e) => {
     e.preventDefault();
 
     if (!input.trim() || !isConnected || !socketRef.current || !currentRoom) {
@@ -190,13 +228,33 @@ export default function Chat() {
     }]);
 
     setInput('');
+    setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 50);
   };
 
   const handleVoiceRecord = async (voiceData) => {
     if (!isConnected || !socketRef.current || !currentRoom) return;
 
+    const tempId = Date.now().toString();
     setSendingMedia('voice');
     setUploadProgress(5);
+
+    // Add pending message immediately with placeholder
+    setMessages(prev => [...prev, {
+      id: tempId,
+      tempId, // Track for replacement
+      text: '🎤 Voice message (uploading...)',
+      type: 'voice',
+      mediaUrl: null, // Placeholder
+      duration: voiceData.duration || 0,
+      senderType: 'you',
+      userName: user.displayName || 'You',
+      timestamp: new Date(),
+      status: 'uploading'
+    }]);
+
+    setPendingMessages(prev => new Map(prev).set(tempId, { type: 'voice', data: voiceData }));
 
     try {
       const reader = new FileReader();
@@ -211,39 +269,33 @@ export default function Chat() {
         setUploadProgress(100);
         const base64Audio = reader.result;
 
+        // Emit with tempId for server to ack back
         socketRef.current.emit('chat message', {
           message: '🎤 Voice message',
           type: 'voice',
           mediaUrl: base64Audio,
-          duration: voiceData.duration,
+          duration: voiceData.duration || 0,
+          tempId, // Send tempId for matching ack
           roomId: currentRoom,
           userId: user.uid,
           userName: user.displayName || 'Anonymous',
-        }, (ack) => {
-          console.log('✅ Voice delivered:', ack);
         });
 
-        setMessages(prev => [...prev, {
-          id: Date.now().toString(),
-          text: '🎤 Voice message',
-          type: 'voice',
-          mediaUrl: base64Audio,
-          duration: voiceData.duration,
-          senderType: 'you',
-          userName: user.displayName || 'You',
-          timestamp: new Date(),
-        }]);
-
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-
         setTimeout(() => {
-          setSendingMedia(null);
-          setUploadProgress(0);
-        }, 500);
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, 50);
       };
+
       reader.readAsDataURL(voiceData.blob);
     } catch (error) {
       console.error('❌ Voice error:', error);
+      // Remove pending on error
+      setMessages(prev => prev.filter(msg => msg.tempId !== tempId));
+      setPendingMessages(prev => {
+        const newMap = new Map(prev);
+        newMap.delete(tempId);
+        return newMap;
+      });
       setSendingMedia(null);
       setUploadProgress(0);
     }
@@ -252,49 +304,49 @@ export default function Chat() {
   const handleImageSelect = async (imageData) => {
     if (!isConnected || !socketRef.current || !currentRoom) return;
 
+    const tempId = Date.now().toString();
     setSendingMedia('image');
     setUploadProgress(5);
 
-    try {
-      let progress = 5;
-      const interval = setInterval(() => {
-        progress += Math.random() * 20;
-        if (progress > 90) progress = 90;
-        setUploadProgress(Math.floor(progress));
-      }, 100);
+    // Add pending message immediately with placeholder
+    setMessages(prev => [...prev, {
+      id: tempId,
+      tempId, // Track for replacement
+      text: '📷 Image (uploading...)',
+      type: 'image',
+      mediaUrl: null, // Placeholder
+      senderType: 'you',
+      userName: user.displayName || 'You',
+      timestamp: new Date(),
+      status: 'uploading'
+    }]);
 
+    setPendingMessages(prev => new Map(prev).set(tempId, { type: 'image', data: imageData }));
+
+    try {
+      // Emit with tempId for server to ack back
       socketRef.current.emit('chat message', {
         message: '📷 Image',
         type: 'image',
         mediaUrl: imageData.base64,
+        tempId, // Send tempId for matching ack
         roomId: currentRoom,
         userId: user.uid,
         userName: user.displayName || 'Anonymous',
-      }, (ack) => {
-        console.log('✅ Image delivered:', ack);
       });
 
-      clearInterval(interval);
-      setUploadProgress(100);
-
-      setMessages(prev => [...prev, {
-        id: Date.now().toString(),
-        text: '📷 Image',
-        type: 'image',
-        mediaUrl: imageData.base64,
-        senderType: 'you',
-        userName: user.displayName || 'You',
-        timestamp: new Date(),
-      }]);
-
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-
       setTimeout(() => {
-        setSendingMedia(null);
-        setUploadProgress(0);
-      }, 500);
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 50);
     } catch (error) {
       console.error('❌ Image error:', error);
+      // Remove pending on error
+      setMessages(prev => prev.filter(msg => msg.tempId !== tempId));
+      setPendingMessages(prev => {
+        const newMap = new Map(prev);
+        newMap.delete(tempId);
+        return newMap;
+      });
       setSendingMedia(null);
       setUploadProgress(0);
     }
@@ -303,64 +355,77 @@ export default function Chat() {
   const handleVideoSelect = async (videoData) => {
     if (!isConnected || !socketRef.current || !currentRoom) return;
 
-    console.log('🎥 SENDING VIDEO - Size:', (videoData.base64.length / (1024 * 1024)).toFixed(2) + 'MB');
+    console.log('🎥 SENDING VIDEO');
+    const tempId = Date.now().toString();
     setSendingMedia('video');
     setUploadProgress(5);
 
+    // Add pending message immediately with placeholder
+    setMessages(prev => [...prev, {
+      id: tempId,
+      tempId, // Track for replacement
+      text: '🎥 Video (uploading...)',
+      type: 'video',
+      mediaUrl: null, // Placeholder
+      thumbnail: null,
+      duration: videoData.duration,
+      senderType: 'you',
+      userName: user.displayName || 'You',
+      timestamp: new Date(),
+      status: 'uploading'
+    }]);
+
+    setPendingMessages(prev => new Map(prev).set(tempId, { type: 'video', data: videoData }));
+
     try {
-      // Smooth progress
       let progress = 5;
       const startTime = Date.now();
-      
-      const interval = setInterval(() => {
+
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+
+      intervalRef.current = setInterval(() => {
         const elapsed = Date.now() - startTime;
-        progress = 5 + (elapsed / 2000) * 95; // Complete in 2 seconds
-        
+        progress = 5 + (elapsed / 2000) * 95;
+
         if (progress >= 100) {
           progress = 100;
-          clearInterval(interval);
+          clearInterval(intervalRef.current);
         }
-        
+
         setUploadProgress(Math.floor(progress));
       }, 50);
 
-      // Send with acknowledgment to ensure delivery
+      // Emit with tempId for server to ack back
       socketRef.current.emit('chat message', {
         message: '🎥 Video',
         type: 'video',
         mediaUrl: videoData.base64,
         thumbnail: videoData.thumbnail,
         duration: videoData.duration,
+        tempId, // Send tempId for matching ack
         roomId: currentRoom,
         userId: user.uid,
         userName: user.displayName || 'Anonymous',
-      }, (ack) => {
-        console.log('✅ Video delivered - acknowledgment:', ack);
-        clearInterval(interval);
-        setUploadProgress(100);
       });
 
-      setMessages(prev => [...prev, {
-        id: Date.now().toString(),
-        text: '🎥 Video',
-        type: 'video',
-        mediaUrl: videoData.base64,
-        thumbnail: videoData.thumbnail,
-        duration: videoData.duration,
-        senderType: 'you',
-        userName: user.displayName || 'You',
-        timestamp: new Date(),
-      }]);
-
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-
       setTimeout(() => {
-        setSendingMedia(null);
-        setUploadProgress(0);
-      }, 500);
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 50);
     } catch (error) {
       console.error('❌ Video error:', error);
       alert('Error sending video: ' + error.message);
+      // Remove pending on error
+      setMessages(prev => prev.filter(msg => msg.tempId !== tempId));
+      setPendingMessages(prev => {
+        const newMap = new Map(prev);
+        newMap.delete(tempId);
+        return newMap;
+      });
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
       setSendingMedia(null);
       setUploadProgress(0);
     }
@@ -372,8 +437,11 @@ export default function Chat() {
       setCurrentRoom(null);
       setIsTyping(false);
       setIsConnected(false);
+      setIsWaiting(true);
       setStatus('Looking for a new stranger...');
       setStrangerName('Stranger');
+      // Clear pending on next
+      setPendingMessages(new Map());
       socketRef.current.emit('find next');
     }
   };
@@ -433,6 +501,7 @@ export default function Chat() {
           onNext={handleNext}
           sendingMedia={sendingMedia}
           uploadProgress={uploadProgress}
+          isWaiting={isWaiting}
         />
       </div>
     </div>
