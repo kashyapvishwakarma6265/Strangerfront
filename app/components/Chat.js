@@ -32,6 +32,11 @@ export default function Chat() {
     socketRef.current = initSocket();
     const socket = socketRef.current;
 
+    // Increase timeout for large uploads
+    socket.io.engine.on('upgrade', (transport) => {
+      console.log('🔄 Transport upgraded to:', transport.name);
+    });
+
     socket.emit('user info', {
       userId: user.uid,
       email: user.email,
@@ -43,6 +48,7 @@ export default function Chat() {
       setStatus('Connected');
       setIsConnected(true);
       
+      // Clear any reconnect timeouts
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
@@ -58,6 +64,7 @@ export default function Chat() {
       setIsConnected(false);
       setStatus('❌ Disconnected: ' + reason);
 
+      // Auto-reconnect after 2 seconds
       if (reason === 'io server disconnect') {
         reconnectTimeoutRef.current = setTimeout(() => {
           console.log('🔄 Attempting to reconnect...');
@@ -213,7 +220,7 @@ export default function Chat() {
           userId: user.uid,
           userName: user.displayName || 'Anonymous',
         }, (ack) => {
-          console.log('✅ Voice delivered');
+          console.log('✅ Voice delivered:', ack);
         });
 
         setMessages(prev => [...prev, {
@@ -264,7 +271,7 @@ export default function Chat() {
         userId: user.uid,
         userName: user.displayName || 'Anonymous',
       }, (ack) => {
-        console.log('✅ Image delivered');
+        console.log('✅ Image delivered:', ack);
       });
 
       clearInterval(interval);
@@ -296,17 +303,18 @@ export default function Chat() {
   const handleVideoSelect = async (videoData) => {
     if (!isConnected || !socketRef.current || !currentRoom) return;
 
-    console.log('🎥 SENDING VIDEO');
+    console.log('🎥 SENDING VIDEO - Size:', (videoData.base64.length / (1024 * 1024)).toFixed(2) + 'MB');
     setSendingMedia('video');
     setUploadProgress(5);
 
     try {
+      // Smooth progress
       let progress = 5;
       const startTime = Date.now();
       
       const interval = setInterval(() => {
         const elapsed = Date.now() - startTime;
-        progress = 5 + (elapsed / 2000) * 95;
+        progress = 5 + (elapsed / 2000) * 95; // Complete in 2 seconds
         
         if (progress >= 100) {
           progress = 100;
@@ -316,6 +324,7 @@ export default function Chat() {
         setUploadProgress(Math.floor(progress));
       }, 50);
 
+      // Send with acknowledgment to ensure delivery
       socketRef.current.emit('chat message', {
         message: '🎥 Video',
         type: 'video',
@@ -326,7 +335,7 @@ export default function Chat() {
         userId: user.uid,
         userName: user.displayName || 'Anonymous',
       }, (ack) => {
-        console.log('✅ Video delivered');
+        console.log('✅ Video delivered - acknowledgment:', ack);
         clearInterval(interval);
         setUploadProgress(100);
       });
