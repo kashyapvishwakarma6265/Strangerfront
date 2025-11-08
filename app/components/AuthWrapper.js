@@ -11,10 +11,10 @@ export default function AuthWrapper() {
   const { user, loading } = useAuth();
 
   useEffect(() => {
-    console.log('🎯 AuthWrapper state update:', { 
-      userEmail: user?.email, 
-      loading, 
-      isLoginMode 
+    console.log('🎯 AuthWrapper state update:', {
+      userEmail: user?.email,
+      loading,
+      isLoginMode
     });
   }, [user, loading, isLoginMode]);
 
@@ -24,7 +24,11 @@ export default function AuthWrapper() {
     return (
       <div className="loading-container">
         <div className="loading-spinner"></div>
-        <p>Loading...</p>
+        <p className="text-2xl">💬 Blink chat</p>
+        
+        <p className="mt-6 text-xl font-dancing-script text-white drop-shadow-md">
+          Safe and 100% secure
+        </p>
       </div>
     );
   }

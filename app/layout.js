@@ -1,42 +1,26 @@
-// import { Providers } from './providers';
-// import './globals.css';
-
-// export const metadata = {
-//   title: 'Blink Anonymous chat',
-//   description: 'Anonymous encrypted chat. No data stored. ',
-// };
-
-// export const viewport = {
-//   width: 'device-width',
-//   initialScale: 1,
-// };
-
-// export default function RootLayout({ children }) {
-//   return (
-//     <html lang="en">
-//       <body className="bg-gradient-to-br from-blue-600 to-purple-600 min-h-screen">
-//         <Providers>
-//           {children}
-//         </Providers>
-//       </body>
-//     </html>
-//   );
-// }
 import { AuthProvider } from './contexts/AuthContext';
 import './globals.css';
+import { Dancing_Script } from 'next/font/google';
+
+const dancingScript = Dancing_Script({
+  subsets: ['latin'],
+  variable: '--font-dancing-script',
+  weight: ['400', '700'],
+});
 
 export const metadata = {
- title: 'Blink Anonymous chat',
-  description: 'Anonymous encrypted chat. No data stored. ',
+  title: 'Blink Anonymous chat',
+  description: 'Anonymous encrypted chat. No data stored.',
+  icons: {
+    icon: '/favicon.png', // path relative to the "public" folder
+  },
 };
 
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body>
-        <AuthProvider>
-          {children}
-        </AuthProvider>
+      <body className={`${dancingScript.variable} font-sans`}>
+        <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
   );

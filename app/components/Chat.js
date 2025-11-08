@@ -7,8 +7,14 @@ import ChatHeader from './ChatHeader';
 import InputBar from './InputBar';
 import MessageBubble from './MessageBubble';
 import TypingIndicator from './TypingIndicator';
+import Image from 'next/image';
+
+import look from '@/public/look.gif';
+import talk from '@/public/talk.gif';
+import left from '@/public/left.gif';
 
 export default function Chat() {
+  /* ------------------- STATE & REFS ------------------- */
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [status, setStatus] = useState('Connecting...');
@@ -20,6 +26,7 @@ export default function Chat() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [pendingMessages, setPendingMessages] = useState(new Map());
   const [isWaiting, setIsWaiting] = useState(false);
+  const [strangerLeft, setStrangerLeft] = useState(false);
 
   const socketRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -28,8 +35,10 @@ export default function Chat() {
   const reconnectTimeoutRef = useRef(null);
   const intervalRef = useRef(null);
 
+  /* ------------------- SOCKET SETUP ------------------- */
   useEffect(() => {
     if (!user) return;
+
     socketRef.current = initSocket();
     const socket = socketRef.current;
 
@@ -43,79 +52,111 @@ export default function Chat() {
       setStatus('Connected');
       setIsConnected(true);
       setIsWaiting(false);
+      setStrangerLeft(false);
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
     });
-    socket.on('connect_error', () => setStatus('⚠️ Connection error - retrying...'));
+
+    socket.on('connect_error', () => setStatus('Warning: Connection error - retrying...'));
+
     socket.on('disconnect', (reason) => {
       setIsConnected(false);
-      setStatus('❌ Disconnected: ' + reason);
+      setStatus('Disconnected: ' + reason);
       if (reason === 'io server disconnect') {
         reconnectTimeoutRef.current = setTimeout(() => socket.connect(), 2000);
       }
     });
+
     socket.on('waiting', (data) => {
       setStatus(data.message);
       setIsConnected(false);
       setIsWaiting(true);
       setStrangerName('Stranger');
+      setStrangerLeft(false);
     });
+
     socket.on('paired', (data) => {
       setCurrentRoom(data.roomId);
-      setStatus('✅ Connected to a stranger');
+      setStatus('Connected to a stranger');
       setIsConnected(true);
       setIsWaiting(false);
       setMessages([]);
       setStrangerName('Stranger');
+      setStrangerLeft(false);
     });
+
     socket.on('chat message', (data) => {
-      setMessages(prev => [...prev, {
-        id: data.id || Date.now().toString(),
-        text: data.message,
-        type: data.type || 'text',
-        mediaUrl: data.mediaUrl,
-        thumbnail: data.thumbnail,
-        duration: data.duration,
-        senderType: 'stranger',
-        userName: data.userName || 'Stranger',
-        timestamp: new Date(),
-      }]);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: data.id || Date.now().toString(),
+          text: data.message,
+          type: data.type || 'text',
+          mediaUrl: data.mediaUrl,
+          thumbnail: data.thumbnail,
+          duration: data.duration,
+          senderType: 'stranger',
+          userName: data.userName || 'Stranger',
+          timestamp: new Date(),
+          isSent: true,
+          isDelivered: true,
+          isSeen: true,
+        },
+      ]);
       setIsTyping(false);
       setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
     });
-    socket.on('media upload ack', (data) => { /* ...your logic here... */ });
+
+    socket.on('message status', ({ id, status }) => {
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === id
+            ? {
+                ...msg,
+                isSent: status === 'sent' || msg.isSent,
+                isDelivered: status === 'delivered' || msg.isDelivered,
+                isSeen: status === 'seen' || msg.isSeen,
+              }
+            : msg
+        )
+      );
+    });
+
+    socket.on('media upload ack', () => {});
+
     socket.on('typing', (data) => setIsTyping(data.isTyping));
+
     socket.on('stranger left', (data) => {
-      setStatus('❌ ' + data.message);
+      setStatus(data.message || 'Stranger has left');
       setIsConnected(false);
       setCurrentRoom(null);
       setIsTyping(false);
       setStrangerName('Stranger');
       setPendingMessages(new Map());
+      setStrangerLeft(true);
     });
 
     return () => {
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       if (intervalRef.current) clearInterval(intervalRef.current);
-      socket.off('connect');
-      socket.off('connect_error');
-      socket.off('disconnect');
-      socket.off('waiting');
-      socket.off('paired');
-      socket.off('chat message');
-      socket.off('media upload ack');
-      socket.off('typing');
-      socket.off('stranger left');
+      socket.off();
     };
   }, [user]);
 
-  // Typing handler
+  /* ------------------- MARK SEEN ------------------- */
+  useEffect(() => {
+    if (!socketRef.current) return;
+    messages
+      .filter((m) => m.senderType === 'stranger' && !m.isSeen)
+      .forEach((m) => {
+        socketRef.current.emit('message seen', { id: m.id });
+      });
+  }, [messages]);
+
+  /* ------------------- INPUT HANDLERS ------------------- */
   const handleInputChange = (e) => {
     setInput(e.target.value);
     if (isConnected && socketRef.current && currentRoom) {
-      socketRef.current.emit('typing', {
-        isTyping: true,
-        roomId: currentRoom,
-      });
+      socketRef.current.emit('typing', { isTyping: true, roomId: currentRoom });
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = setTimeout(() => {
         if (socketRef.current && currentRoom) {
@@ -125,112 +166,128 @@ export default function Chat() {
     }
   };
 
-  // Text send
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!input.trim() || !isConnected || !socketRef.current || !currentRoom) return;
+
     const message = input.trim();
+    const msgId = `${Date.now()}${Math.random().toString(36).slice(2)}`;
+
     socketRef.current.emit('chat message', {
+      id: msgId,
       message,
       type: 'text',
       roomId: currentRoom,
       userId: user.uid,
       userName: user.displayName || user.email,
-      mediaUrl: null,
-      thumbnail: null,
-      duration: null,
     });
-    setMessages(prev => [...prev, {
-      id: Date.now().toString(),
-      text: message,
-      type: 'text',
-      senderType: 'you',
-      userName: user.displayName || user.email,
-      timestamp: new Date(),
-    }]);
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: msgId,
+        text: message,
+        type: 'text',
+        senderType: 'you',
+        userName: user.displayName || user.email,
+        timestamp: new Date(),
+        isSent: false,
+        isDelivered: false,
+        isSeen: false,
+      },
+    ]);
+
     setInput('');
     setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
   };
 
-  // Voice send
+  /* ------------------- MEDIA HANDLERS ------------------- */
   const handleVoiceRecord = async (voiceData) => {
     if (!isConnected || !socketRef.current || !currentRoom) return;
     setSendingMedia('voice');
     setUploadProgress(5);
+
     try {
       const reader = new FileReader();
       reader.onload = () => {
         const base64Audio = reader.result;
         socketRef.current.emit('chat message', {
-          message: '🎤 Voice message',
+          message: 'Voice message',
           type: 'voice',
           mediaUrl: base64Audio,
           duration: voiceData.duration || 0,
           roomId: currentRoom,
           userId: user.uid,
           userName: user.displayName || user.email,
-          thumbnail: null,
         });
-        setMessages(prev => [...prev, {
-          id: Date.now().toString(),
-          text: '🎤 Voice message',
-          type: 'voice',
-          mediaUrl: base64Audio,
-          senderType: 'you',
-          userName: user.displayName || user.email,
-          timestamp: new Date(),
-        }]);
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Date.now().toString(),
+            text: 'Voice message',
+            type: 'voice',
+            mediaUrl: base64Audio,
+            senderType: 'you',
+            userName: user.displayName || user.email,
+            timestamp: new Date(),
+          },
+        ]);
+
         setSendingMedia(null);
         setUploadProgress(100);
       };
       reader.readAsDataURL(voiceData.blob);
-    } catch (error) {
+    } catch {
       setSendingMedia(null);
       setUploadProgress(0);
     }
   };
 
-  // Image send
   const handleImageSelect = async (imageData) => {
     if (!isConnected || !socketRef.current || !currentRoom) return;
     setSendingMedia('image');
     setUploadProgress(5);
+
     try {
       socketRef.current.emit('chat message', {
-        message: '📷 Image',
+        message: 'Image',
         type: 'image',
         mediaUrl: imageData.base64,
         roomId: currentRoom,
         userId: user.uid,
         userName: user.displayName || user.email,
-        thumbnail: null,
-        duration: null,
       });
-      setMessages(prev => [...prev, {
-        id: Date.now().toString(),
-        text: '📷 Image',
-        type: 'image',
-        mediaUrl: imageData.base64,
-        senderType: 'you',
-        userName: user.displayName || user.email,
-        timestamp: new Date(),
-      }]);
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          text: 'Image',
+          type: 'image',
+          mediaUrl: imageData.base64,
+          senderType: 'you',
+          userName: user.displayName || user.email,
+          timestamp: new Date(),
+        },
+      ]);
+
       setSendingMedia(null);
       setUploadProgress(100);
-    } catch (error) {
+    } catch {
       setSendingMedia(null);
       setUploadProgress(0);
     }
   };
 
-  // Video send
   const handleVideoSelect = async (videoData) => {
     if (!isConnected || !socketRef.current || !currentRoom) return;
     setSendingMedia('video');
     setUploadProgress(5);
+
     try {
       socketRef.current.emit('chat message', {
-        message: '🎥 Video',
+        message: 'Video',
         type: 'video',
         mediaUrl: videoData.base64,
         thumbnail: videoData.thumbnail,
@@ -239,71 +296,137 @@ export default function Chat() {
         userId: user.uid,
         userName: user.displayName || user.email,
       });
-      setMessages(prev => [...prev, {
-        id: Date.now().toString(),
-        text: '🎥 Video',
-        type: 'video',
-        mediaUrl: videoData.base64,
-        thumbnail: videoData.thumbnail,
-        duration: videoData.duration,
-        senderType: 'you',
-        userName: user.displayName || user.email,
-        timestamp: new Date(),
-      }]);
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          text: 'Video',
+          type: 'video',
+          mediaUrl: videoData.base64,
+          thumbnail: videoData.thumbnail,
+          duration: videoData.duration,
+          senderType: 'you',
+          userName: user.displayName || user.email,
+          timestamp: new Date(),
+        },
+      ]);
+
       setSendingMedia(null);
       setUploadProgress(100);
-    } catch (error) {
+    } catch {
       setSendingMedia(null);
       setUploadProgress(0);
     }
   };
 
+  /* ------------------- NAVIGATION ------------------- */
   const handleNext = () => {
-    if (socketRef.current) {
-      setMessages([]);
-      setCurrentRoom(null);
-      setIsTyping(false);
-      setIsConnected(false);
-      setIsWaiting(true);
-      setStatus('Looking for a new stranger...');
-      setStrangerName('Stranger');
-      setPendingMessages(new Map());
-      socketRef.current.emit('find next');
-    }
+    if (!socketRef.current) return;
+    setMessages([]);
+    setCurrentRoom(null);
+    setIsTyping(false);
+    setIsConnected(false);
+    setIsWaiting(true);
+    setStatus('Looking for a new stranger...');
+    setStrangerName('Stranger');
+    setPendingMessages(new Map());
+    setStrangerLeft(false);
+    socketRef.current.emit('find next');
   };
 
   const handleLogout = async () => {
-    if (socketRef.current) {
-      socketRef.current.disconnect();
-    }
+    if (socketRef.current) socketRef.current.disconnect();
     await logout();
   };
 
+  /* ------------------- RENDER ------------------- */
   return (
     <div className="flex flex-col h-screen bg-white">
-      <ChatHeader status={status} user={user} onLogout={handleLogout} />
-      <div className="flex flex-col flex-1 overflow-hidden">
-        <div className="flex-1 overflow-y-auto scrollbar-thin p-4 md:p-5 space-y-3">
+      {/* ---------- HEADER ---------- */}
+      <ChatHeader
+        status={status}
+        user={user}
+        onLogout={handleLogout}
+        isConnected={isConnected}
+        onNext={handleNext}
+        disabled={!isConnected}
+      />
+
+      {/* ---------- MAIN AREA ---------- */}
+      <main className="flex-1 flex flex-col overflow-hidden">
+        {/* ---- MESSAGE LIST ---- */}
+        <section className="flex-1 overflow-y-auto scrollbar-thin px-4 py-3 space-y-3 md:px-6 md:py-4">
           {messages.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-center">
-              <p className="text-gray-500 text-lg">
-                {isConnected ? '✅ Start a conversation...' : '⏳ ' + status}
-              </p>
+            /* ---------- EMPTY STATE (centered) ---------- */
+            <div className="flex flex-col items-center justify-center h-full text-center space-y-6 px-4">
+              {strangerLeft ? (
+                <div className="flex flex-col items-center space-y-4 animate-fadeIn">
+                  <Image
+                    src={left}
+                    alt="Stranger left"
+                    width={80}
+                    height={80}
+                    className="object-contain drop-shadow-lg"
+                    unoptimized
+                    priority
+                  />
+                  <p className="text-2xl md:text-3xl font-bold text-red-600">
+                    Stranger has left the chat
+                  </p>
+                  <button
+                    onClick={handleNext}
+                    className="px-6 py-2.5 bg-blue-600 text-white rounded-full text-sm font-medium hover:bg-blue-700 transition shadow-md"
+                  >
+                    Find Someone New
+                  </button>
+                </div>
+              ) : isConnected ? (
+                <div className="flex items-center space-x-3 animate-fadeIn">
+                  <Image
+                    src={talk}
+                    alt="Ready to chat"
+                    width={56}
+                    height={56}
+                    className="object-contain drop-shadow-md"
+                    unoptimized
+                    priority
+                  />
+                  <p className="text-xl md:text-2xl font-semibold text-green-600 flex items-center space-x-2">
+                    <span className="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                    <span>Start a conversation...</span>
+                  </p>
+                </div>
+              ) : (
+                <div className="flex items-center space-x-3 animate-fadeIn">
+                  <Image
+                    src={look}
+                    alt="Connecting..."
+                    width={56}
+                    height={56}
+                    className="object-contain drop-shadow-md"
+                    unoptimized
+                    priority
+                  />
+                  <p className="text-lg md:text-xl font-medium text-gray-600">
+                    {status}
+                  </p>
+                </div>
+              )}
             </div>
           ) : (
             <>
-              {messages.map(msg => (
-                <MessageBubble
-                  key={msg.id}
-                  message={msg}
-                  senderType={msg.senderType}
-                />
+              {messages.map((msg) => (
+                <MessageBubble key={msg.id} message={msg} senderType={msg.senderType} />
               ))}
               {isTyping && <TypingIndicator strangerName={strangerName} />}
             </>
           )}
+          {/* invisible anchor for auto-scroll */}
           <div ref={messagesEndRef} />
-        </div>
+        </section>
+
+        {/* ---- INPUT BAR ---- */}
         <InputBar
           value={input}
           onChange={handleInputChange}
@@ -317,7 +440,7 @@ export default function Chat() {
           uploadProgress={uploadProgress}
           isWaiting={isWaiting}
         />
-      </div>
+      </main>
     </div>
   );
 }
