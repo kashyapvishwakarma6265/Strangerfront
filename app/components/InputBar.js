@@ -127,7 +127,7 @@ export default function InputBar({
 
   return (
     <form
-      className="w-full bg-white border-t border-gray-200 flex flex-col gap-2 py-3 px-4 sticky bottom-0"
+      className="w-full bg-white border-t border-gray-200 flex flex-col gap-1 px-2 py-2 sm:gap-2 sm:px-4 sm:py-3 sticky bottom-0"
       style={{ boxShadow: '0 -1px 8px rgba(60,60,60,0.05)' }}
       onSubmit={(e) => {
         e.preventDefault();
@@ -230,8 +230,8 @@ export default function InputBar({
             type="button"
             onClick={isRecording ? () => setIsRecording(false) : startRecording}
             className={`${isRecording
-                ? 'bg-red-600 hover:bg-red-700 animate-pulse'
-                : 'bg-purple-500 hover:bg-purple-600'
+              ? 'bg-red-600 hover:bg-red-700 animate-pulse'
+              : 'bg-purple-500 hover:bg-purple-600'
               } rounded-full text-white p-3 transition flex items-center justify-center`}
             disabled={sendingMedia != null || disabled}
             title={isRecording ? 'Stop Recording' : 'Record Voice'}
