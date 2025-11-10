@@ -111,17 +111,17 @@ export default function Chat() {
         prev.map((msg) =>
           msg.id === id
             ? {
-                ...msg,
-                isSent: status === 'sent' || msg.isSent,
-                isDelivered: status === 'delivered' || msg.isDelivered,
-                isSeen: status === 'seen' || msg.isSeen,
-              }
+              ...msg,
+              isSent: status === 'sent' || msg.isSent,
+              isDelivered: status === 'delivered' || msg.isDelivered,
+              isSeen: status === 'seen' || msg.isSeen,
+            }
             : msg
         )
       );
     });
 
-    socket.on('media upload ack', () => {});
+    socket.on('media upload ack', () => { });
 
     socket.on('typing', (data) => setIsTyping(data.isTyping));
 
@@ -354,11 +354,13 @@ export default function Chat() {
       />
 
       {/* ---------- MAIN AREA ---------- */}
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main
+        className="flex-1 flex flex-col overflow-hidden h-[100dvh] max-h-[100dvh]"
+        style={{ WebkitOverflowScrolling: 'touch' }}
+      >
         {/* ---- MESSAGE LIST ---- */}
         <section className="flex-1 overflow-y-auto scrollbar-thin px-4 py-3 space-y-3 md:px-6 md:py-4">
           {messages.length === 0 ? (
-            /* ---------- EMPTY STATE (centered) ---------- */
             <div className="flex flex-col items-center justify-center h-full text-center space-y-6 px-4">
               {strangerLeft ? (
                 <div className="flex flex-col items-center space-y-4 animate-fadeIn">
@@ -422,25 +424,27 @@ export default function Chat() {
               {isTyping && <TypingIndicator strangerName={strangerName} />}
             </>
           )}
-          {/* invisible anchor for auto-scroll */}
           <div ref={messagesEndRef} />
         </section>
 
         {/* ---- INPUT BAR ---- */}
-        <InputBar
-          value={input}
-          onChange={handleInputChange}
-          onSubmit={handleSubmit}
-          disabled={!isConnected}
-          onVoiceRecord={handleVoiceRecord}
-          onImageSelect={handleImageSelect}
-          onVideoSelect={handleVideoSelect}
-          onNext={handleNext}
-          sendingMedia={sendingMedia}
-          uploadProgress={uploadProgress}
-          isWaiting={isWaiting}
-        />
+        <div className="sticky bottom-0 w-full bg-white border-t border-gray-200 shadow-sm z-10">
+          <InputBar
+            value={input}
+            onChange={handleInputChange}
+            onSubmit={handleSubmit}
+            disabled={!isConnected}
+            onVoiceRecord={handleVoiceRecord}
+            onImageSelect={handleImageSelect}
+            onVideoSelect={handleVideoSelect}
+            onNext={handleNext}
+            sendingMedia={sendingMedia}
+            uploadProgress={uploadProgress}
+            isWaiting={isWaiting}
+          />
+        </div>
       </main>
+
     </div>
   );
 }
