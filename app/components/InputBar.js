@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { Image, Paperclip, Send, Mic, Video, Smile } from 'lucide-react';
 import EmojiPicker from './EmojiPicker';
 
 export default function InputBar({
@@ -160,7 +161,7 @@ export default function InputBar({
           }}
           className="bg-blue-500 hover:bg-blue-600 rounded-full text-white p-3 transition flex items-center justify-center"
         >
-          📷
+          <Image size={20} />
         </button>
         <div className="flex-1 relative">
 
@@ -184,7 +185,7 @@ export default function InputBar({
             className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full hover:bg-gray-200 transition"
             title="Attach"
           >
-            📎
+            <Paperclip size={16} />
           </button>
 
           {/* Attachment Popup */}
@@ -199,7 +200,8 @@ export default function InputBar({
                 }}
                 className="flex items-center gap-2 px-3 py-2 hover:bg-gray-100 rounded text-left text-sm"
               >
-                🎥 Video
+                <Video size={16} />
+                Video
               </button>
               <button
                 type="button"
@@ -209,7 +211,8 @@ export default function InputBar({
                 }}
                 className="flex items-center gap-2 px-3 py-2 hover:bg-gray-100 rounded text-left text-sm"
               >
-                🙂 Emoji
+                <Smile size={16} />
+                Emoji
               </button>
             </div>
           )}
@@ -223,7 +226,7 @@ export default function InputBar({
             className="bg-blue-500 hover:bg-blue-600 rounded-full text-white p-3 transition flex items-center justify-center"
             title="Send"
           >
-            ➢
+            <Send size={20} />
           </button>
         ) : (
           <button
@@ -236,11 +239,23 @@ export default function InputBar({
             disabled={sendingMedia != null || disabled}
             title={isRecording ? 'Stop Recording' : 'Record Voice'}
           >
-            {isRecording ? '⏹️' : '🎤'}
+            {isRecording ? (
+              <svg
+                className="animate-pulse"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="none" />
+              </svg>
+            ) : (
+              <Mic size={20} />
+            )}
           </button>
         )}
       </div>
-
 
 
       {/* Hidden File Inputs */}

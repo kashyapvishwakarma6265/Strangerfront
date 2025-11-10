@@ -10,32 +10,39 @@ export default function AuthWrapper() {
   const [isLoginMode, setIsLoginMode] = useState(true);
   const { user, loading } = useAuth();
 
+  // Debug logs (keep in dev only)
   useEffect(() => {
-    console.log('🎯 AuthWrapper state update:', {
+    console.log('AuthWrapper state:', {
       userEmail: user?.email,
       loading,
-      isLoginMode
+      isLoginMode,
     });
   }, [user, loading, isLoginMode]);
 
-  // Show loading spinner
+  /* -------------------------------------------------
+     1. Loading State – Spinner + Brand
+  ------------------------------------------------- */
   if (loading) {
-    console.log('⏳ Still loading...');
     return (
-      <div className="loading-container">
-        <div className="loading-spinner"></div>
-        <p className="text-2xl">💬 Blink chat</p>
-        
-        <p className="mt-6 text-xl font-dancing-script text-white drop-shadow-md">
-          Safe and 100% secure
+      <div className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-br from-indigo-600 to-purple-700 text-white">
+        {/* Spinner */}
+        <div className="mb-6 h-16 w-16 animate-spin rounded-full border-4 border-white border-t-transparent"></div>
+
+        {/* App Name */}
+        <h1 className="text-4xl font-bold tracking-tight">Blink Chat</h1>
+
+        {/* Tagline with emoji */}
+        <p className="mt-4 text-lg font-light">
+          <span className="mr-1">Safe & 100% secure</span>
         </p>
       </div>
     );
   }
 
-  // Show login/signup forms if not logged in
+  /* -------------------------------------------------
+     2. Not Authenticated – Show Login / Signup
+  ------------------------------------------------- */
   if (!user) {
-    console.log('📝 No user, showing login form');
     return isLoginMode ? (
       <LoginForm onToggleMode={() => setIsLoginMode(false)} />
     ) : (
@@ -43,7 +50,8 @@ export default function AuthWrapper() {
     );
   }
 
-  // Show chat if logged in
-  console.log('✅ User logged in, showing chat page');
+  /* -------------------------------------------------
+     3. Authenticated – Show Chat
+  ------------------------------------------------- */
   return <Chat />;
 }

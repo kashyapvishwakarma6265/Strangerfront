@@ -1,11 +1,15 @@
 'use client';
 
+import { Video, Phone, MessageCircle } from 'lucide-react';
+
 export default function ChatHeader({ 
   status, 
   user, 
   onLogout,
   isConnected,
   onNext,
+  onVideoCall,
+  onAudioCall,
   disabled = false
 }) {
   return (
@@ -14,7 +18,7 @@ export default function ChatHeader({
       {/* Left - Title */}
       <div className="flex items-center gap-2 md:gap-3 min-w-0 flex-1 w-full md:w-auto">
         <div className="w-10 h-10 md:w-10 md:h-10 bg-white bg-opacity-30 rounded-full flex items-center justify-center text-base md:text-xl flex-shrink-0">
-          💬
+          <MessageCircle size={20} className="text-white" />
         </div>
         <div className="min-w-0">
           <h1 className="text-base md:text-3xl font-bold truncate">Blink Chat</h1>
@@ -22,20 +26,46 @@ export default function ChatHeader({
         </div>
       </div>
 
-      {/* Center - Status Indicator (Hidden on small screens) */}
-      {/* {isConnected && (
-        <div className="hidden md:flex items-center gap-2 text-xs md:text-sm flex-shrink-0">
-          <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
-          <span>Connected</span>
-        </div>
-      )} */}
-
-      {/* Right - User Info + Logout + Next */}
+      {/* Right - User Info + Call Buttons + Logout + Next */}
       <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2 w-full sm:w-auto">
-        <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
+        <div className="flex items-right gap-2 w-full sm:w-auto justify-between sm:justify-end">
           <span className="text-xl md:text-xl font-semibold truncate max-w-[400px] sm:max-w-xs text-right">
             {user?.displayName || user?.email?.split('@')[0] || 'Guest'}
           </span>
+          
+          {/* Call Buttons */}
+          <div className="flex items-center gap-2">
+            {/* Video Call Button */}
+            <button
+              type="button"
+              onClick={() => {
+                if (!disabled && typeof onVideoCall === "function") {
+                  onVideoCall();
+                }
+              }}
+              disabled={disabled}
+              className="p-2 bg-white bg-opacity-20 hover:bg-opacity-30 disabled:bg-opacity-10 disabled:cursor-not-allowed rounded-lg transition"
+              title="Video Call"
+            >
+              <Video size={20} className="md:w-5 md:h-5" />
+            </button>
+
+            {/* Audio Call Button */}
+            <button
+              type="button"
+              onClick={() => {
+                if (!disabled && typeof onAudioCall === "function") {
+                  onAudioCall();
+                }
+              }}
+              disabled={disabled}
+              className="p-2 bg-white bg-opacity-20 hover:bg-opacity-30 disabled:bg-opacity-10 disabled:cursor-not-allowed rounded-lg transition"
+              title="Audio Call"
+            >
+              <Phone size={20} className="md:w-5 md:h-5" />
+            </button>
+          </div>
+
           <button
             onClick={onLogout}
             className="px-2.5 md:px-4 py-1.5 md:py-2 bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg transition text-xs md:text-base font-semibold whitespace-nowrap"
