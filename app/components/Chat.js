@@ -104,14 +104,14 @@ export default function Chat() {
       setMessages((prev) => [
         ...prev,
         {
-          id: data.id || Date.now().toString(),
+           id: data.id || Date.now().toString(),
           text: data.message,
-          type: data.type || "text",
+          type: data.type || 'text',
           mediaUrl: data.mediaUrl,
           thumbnail: data.thumbnail,
           duration: data.duration,
-          senderType: "stranger",
-          userName:  "Stranger",
+          senderType: 'stranger',
+          userName: data.userName || 'Stranger',
           timestamp: new Date(),
           isSent: true,
           isDelivered: true,
@@ -221,7 +221,7 @@ export default function Chat() {
       type: "text",
       roomId: currentRoom,
       userId: user.uid,
-      // Removed userName to maintain anonymity
+      userName: user.displayName || user.email,
     });
 
     setMessages((prev) => [
@@ -263,7 +263,7 @@ export default function Chat() {
           duration: voiceData.duration || 0,
           roomId: currentRoom,
           userId: user.uid,
-          // Removed userName to maintain anonymity
+          userName: user.displayName || user.email,
         });
 
         setMessages((prev) => [
@@ -301,7 +301,7 @@ export default function Chat() {
         mediaUrl: imageData.base64,
         roomId: currentRoom,
         userId: user.uid,
-        // Removed userName to maintain anonymity
+         userName: user.displayName || user.email,
       });
 
       setMessages((prev) => [
@@ -339,7 +339,7 @@ export default function Chat() {
         duration: videoData.duration,
         roomId: currentRoom,
         userId: user.uid,
-        // Removed userName to maintain anonymity
+        userName: user.displayName || user.email,
       });
 
       setMessages((prev) => [
