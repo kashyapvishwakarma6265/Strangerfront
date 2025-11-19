@@ -410,20 +410,20 @@ export default function Chat() {
   />
 
   {/* ---------- CALL MODAL ---------- */}
-  {callState !== "idle" && (
-    <CallModal
-      callType={callType}
-      isIncoming={isIncoming}
-      callerName={strangerName}
-      onAccept={acceptCall}
-      onReject={rejectCall}
-      onHangup={endCall}
-      localStream={localStream}
-      remoteStream={remoteStream}
-      inCall={callState === "connected"}
-      isCaller={!isIncoming}
-    />
-  )}
+ {(callState !== 'idle' || isIncoming) && (
+        <CallModal
+          callType={callType}
+          isIncoming={isIncoming}
+          callerName={strangerName}
+          onAccept={acceptCall}
+          onReject={rejectCall}
+          onHangup={endCall}
+          localStream={localStream}
+          remoteStream={remoteStream}
+          inCall={callState === 'connected' || callState === 'connecting'}
+          isCaller={!isIncoming}
+        />
+      )}
 
   {/* ---------- MAIN AREA ---------- */}
   <main className="flex-1 flex flex-col overflow-hidden">

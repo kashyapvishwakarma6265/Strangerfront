@@ -7,7 +7,8 @@ const ICE_SERVERS = {
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:openrelay.metered.ca:80' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
   ],
 };
 
@@ -18,7 +19,7 @@ export function useWebRTC(socket, isConnected) {
   const [callType, setCallType] = useState(null);
   const [isIncoming, setIsIncoming] = useState(false);
   const [remotePeerId, setRemotePeerId] = useState(null);
-  
+
   const peerConnectionRef = useRef(null);
   const pendingCandidatesRef = useRef([]);
   const localStreamRef = useRef(null);
@@ -30,8 +31,7 @@ export function useWebRTC(socket, isConnected) {
 
     const peerConnection = new RTCPeerConnection(ICE_SERVERS);
     peerConnectionRef.current = peerConnection;
-    
-    // Make peer connection globally accessible for CallModal
+
     if (typeof window !== 'undefined') {
       window.currentPeerConnection = peerConnection;
     }
@@ -43,9 +43,13 @@ export function useWebRTC(socket, isConnected) {
       }
     };
 
+    // FIXED: Properly handle remote tracks
     peerConnection.ontrack = (event) => {
-      console.log('📹 Received remote track');
-      setRemoteStream(event.streams[0]);
+      console.log('📹 Received remote track:', event.track.kind);
+      if (event.streams && event.streams[0]) {
+        console.log('📹 Setting remote stream with tracks:', event.streams[0].getTracks().length);
+        setRemoteStream(event.streams[0]);
+      }
     };
 
     peerConnection.onconnectionstatechange = () => {
@@ -74,17 +78,20 @@ export function useWebRTC(socket, isConnected) {
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true
+          autoGainControl: true,
         },
-        video: isVideo ? {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          facingMode: 'user'
-        } : false,
+        video: isVideo
+          ? {
+              width: { ideal: 1280, max: 1920 },
+              height: { ideal: 720, max: 1080 },
+              facingMode: 'user',
+            }
+          : false,
       };
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      console.log('🎥 Local stream started');
+      console.log('🎥 Local stream started with tracks:', stream.getTracks().length);
+
       setLocalStream(stream);
       localStreamRef.current = stream;
       return stream;
@@ -97,7 +104,7 @@ export function useWebRTC(socket, isConnected) {
 
   const endCall = useCallback(() => {
     console.log('📴 Ending call');
-    
+
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => track.stop());
     }
@@ -124,31 +131,36 @@ export function useWebRTC(socket, isConnected) {
     localStreamRef.current = null;
   }, [socket, callState]);
 
-  const initiateCall = useCallback(async (type = 'video') => {
-    if (!socket || !isConnected) {
-      console.error('❌ Socket not connected');
-      return;
-    }
+  const initiateCall = useCallback(
+    async (type = 'video') => {
+      if (!socket || !isConnected) {
+        console.error('❌ Socket not connected');
+        return;
+      }
 
-    try {
-      console.log(`📞 Initiating ${type} call`);
-      setCallType(type);
-      setCallState('calling');
-      setIsIncoming(false);
+      try {
+        console.log(`📞 Initiating ${type} call`);
+        setCallType(type);
+        setCallState('calling');
+        setIsIncoming(false);
 
-      const stream = await startLocalStream(type === 'video');
-      const peerConnection = createPeerConnection();
+        const stream = await startLocalStream(type === 'video');
+        const peerConnection = createPeerConnection();
 
-      stream.getTracks().forEach((track) => {
-        peerConnection.addTrack(track, stream);
-      });
+        // FIXED: Add tracks properly
+        stream.getTracks().forEach((track) => {
+          console.log(`Adding ${track.kind} track to peer connection`);
+          peerConnection.addTrack(track, stream);
+        });
 
-      socket.emit('call:initiate', { callType: type });
-    } catch (error) {
-      console.error('❌ Error initiating call:', error);
-      setCallState('idle');
-    }
-  }, [socket, isConnected, startLocalStream, createPeerConnection]);
+        socket.emit('call:initiate', { callType: type });
+      } catch (error) {
+        console.error('❌ Error initiating call:', error);
+        setCallState('idle');
+      }
+    },
+    [socket, isConnected, startLocalStream, createPeerConnection]
+  );
 
   const acceptCall = useCallback(async () => {
     if (!socket || !remotePeerId) {
@@ -163,7 +175,9 @@ export function useWebRTC(socket, isConnected) {
       const stream = await startLocalStream(callType === 'video');
       const peerConnection = createPeerConnection();
 
+      // FIXED: Add tracks properly
       stream.getTracks().forEach((track) => {
+        console.log(`Adding ${track.kind} track to peer connection`);
         peerConnection.addTrack(track, stream);
       });
 
@@ -230,11 +244,12 @@ export function useWebRTC(socket, isConnected) {
 
     const handleOffer = async ({ offer, from }) => {
       console.log('📥 Received offer from', from);
+
       try {
         const peerConnection = peerConnectionRef.current;
         if (peerConnection) {
           await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-          
+
           // Add pending ICE candidates
           pendingCandidatesRef.current.forEach(async (candidate) => {
             await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
@@ -254,11 +269,12 @@ export function useWebRTC(socket, isConnected) {
 
     const handleAnswer = async ({ answer }) => {
       console.log('📥 Received answer');
+
       try {
         const peerConnection = peerConnectionRef.current;
         if (peerConnection) {
           await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-          
+
           // Add pending ICE candidates
           pendingCandidatesRef.current.forEach(async (candidate) => {
             await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
@@ -273,6 +289,7 @@ export function useWebRTC(socket, isConnected) {
 
     const handleIceCandidate = async ({ candidate }) => {
       console.log('📥 Received ICE candidate');
+
       try {
         const peerConnection = peerConnectionRef.current;
         if (peerConnection && peerConnection.remoteDescription) {
@@ -313,6 +330,7 @@ export function useWebRTC(socket, isConnected) {
         localStreamRef.current = newStream;
       };
     }
+
     return () => {
       if (typeof window !== 'undefined') {
         delete window.updateLocalStream;
