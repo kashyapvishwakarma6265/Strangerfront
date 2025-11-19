@@ -2,7 +2,6 @@
 
 import { useRef, useState, useEffect, useCallback } from 'react';
 
-// Free STUN servers for NAT traversal
 const ICE_SERVERS = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -19,9 +18,10 @@ export function useWebRTC(socket, isConnected) {
   const [callType, setCallType] = useState(null);
   const [isIncoming, setIsIncoming] = useState(false);
   const [remotePeerId, setRemotePeerId] = useState(null);
-
+  
   const peerConnectionRef = useRef(null);
   const pendingCandidatesRef = useRef([]);
+  const localStreamRef = useRef(null);
 
   const createPeerConnection = useCallback(() => {
     if (peerConnectionRef.current) {
@@ -30,6 +30,11 @@ export function useWebRTC(socket, isConnected) {
 
     const peerConnection = new RTCPeerConnection(ICE_SERVERS);
     peerConnectionRef.current = peerConnection;
+    
+    // Make peer connection globally accessible for CallModal
+    if (typeof window !== 'undefined') {
+      window.currentPeerConnection = peerConnection;
+    }
 
     peerConnection.onicecandidate = (event) => {
       if (event.candidate && socket) {
@@ -47,10 +52,17 @@ export function useWebRTC(socket, isConnected) {
       console.log('🔗 Connection state:', peerConnection.connectionState);
       if (peerConnection.connectionState === 'connected') {
         setCallState('connected');
-      } else if (peerConnection.connectionState === 'disconnected' || 
-                 peerConnection.connectionState === 'failed') {
+      } else if (
+        peerConnection.connectionState === 'disconnected' ||
+        peerConnection.connectionState === 'failed' ||
+        peerConnection.connectionState === 'closed'
+      ) {
         endCall();
       }
+    };
+
+    peerConnection.oniceconnectionstatechange = () => {
+      console.log('🧊 ICE Connection state:', peerConnection.iceConnectionState);
     };
 
     return peerConnection;
@@ -64,8 +76,8 @@ export function useWebRTC(socket, isConnected) {
           noiseSuppression: true,
           autoGainControl: true
         },
-        video: isVideo ? { 
-          width: { ideal: 1280 }, 
+        video: isVideo ? {
+          width: { ideal: 1280 },
           height: { ideal: 720 },
           facingMode: 'user'
         } : false,
@@ -74,6 +86,7 @@ export function useWebRTC(socket, isConnected) {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       console.log('🎥 Local stream started');
       setLocalStream(stream);
+      localStreamRef.current = stream;
       return stream;
     } catch (error) {
       console.error('❌ Error accessing media devices:', error);
@@ -85,13 +98,16 @@ export function useWebRTC(socket, isConnected) {
   const endCall = useCallback(() => {
     console.log('📴 Ending call');
     
-    if (localStream) {
-      localStream.getTracks().forEach((track) => track.stop());
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((track) => track.stop());
     }
 
     if (peerConnectionRef.current) {
       peerConnectionRef.current.close();
       peerConnectionRef.current = null;
+      if (typeof window !== 'undefined') {
+        window.currentPeerConnection = null;
+      }
     }
 
     if (socket && callState !== 'idle') {
@@ -105,7 +121,8 @@ export function useWebRTC(socket, isConnected) {
     setIsIncoming(false);
     setRemotePeerId(null);
     pendingCandidatesRef.current = [];
-  }, [localStream, socket, callState]);
+    localStreamRef.current = null;
+  }, [socket, callState]);
 
   const initiateCall = useCallback(async (type = 'video') => {
     if (!socket || !isConnected) {
@@ -127,7 +144,6 @@ export function useWebRTC(socket, isConnected) {
       });
 
       socket.emit('call:initiate', { callType: type });
-
     } catch (error) {
       console.error('❌ Error initiating call:', error);
       setCallState('idle');
@@ -142,7 +158,7 @@ export function useWebRTC(socket, isConnected) {
 
     try {
       console.log('✅ Accepting call');
-      setCallState('connected');
+      setCallState('connecting');
 
       const stream = await startLocalStream(callType === 'video');
       const peerConnection = createPeerConnection();
@@ -152,7 +168,6 @@ export function useWebRTC(socket, isConnected) {
       });
 
       socket.emit('call:accept', { to: remotePeerId });
-
     } catch (error) {
       console.error('❌ Error accepting call:', error);
       rejectCall();
@@ -169,7 +184,6 @@ export function useWebRTC(socket, isConnected) {
 
   // Socket event listeners
   useEffect(() => {
-    // Exit early if socket is not available
     if (!socket || typeof socket.on !== 'function') {
       console.log('⚠️ Socket not available yet');
       return;
@@ -177,7 +191,6 @@ export function useWebRTC(socket, isConnected) {
 
     console.log('✅ Setting up WebRTC socket listeners');
 
-    // Incoming call
     const handleIncomingCall = async ({ callType: type, from }) => {
       console.log(`📞 Incoming ${type} call from ${from}`);
       setCallType(type);
@@ -186,11 +199,10 @@ export function useWebRTC(socket, isConnected) {
       setRemotePeerId(from);
     };
 
-    // Call accepted
     const handleCallAccepted = async ({ from }) => {
       console.log('✅ Call accepted by', from);
       setRemotePeerId(from);
-      setCallState('connected');
+      setCallState('connecting');
 
       try {
         const peerConnection = peerConnectionRef.current;
@@ -205,20 +217,17 @@ export function useWebRTC(socket, isConnected) {
       }
     };
 
-    // Call rejected
     const handleCallRejected = () => {
       console.log('❌ Call rejected');
       alert('Call was rejected');
       endCall();
     };
 
-    // Call ended by remote peer
     const handleCallEnded = () => {
       console.log('📴 Call ended by remote peer');
       endCall();
     };
 
-    // Receive WebRTC offer
     const handleOffer = async ({ offer, from }) => {
       console.log('📥 Received offer from', from);
       try {
@@ -226,6 +235,7 @@ export function useWebRTC(socket, isConnected) {
         if (peerConnection) {
           await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
           
+          // Add pending ICE candidates
           pendingCandidatesRef.current.forEach(async (candidate) => {
             await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
           });
@@ -235,13 +245,13 @@ export function useWebRTC(socket, isConnected) {
           await peerConnection.setLocalDescription(answer);
           console.log('📤 Sending answer');
           socket.emit('webrtc:answer', { answer, to: from });
+          setCallState('connected');
         }
       } catch (error) {
         console.error('❌ Error handling offer:', error);
       }
     };
 
-    // Receive WebRTC answer
     const handleAnswer = async ({ answer }) => {
       console.log('📥 Received answer');
       try {
@@ -249,17 +259,18 @@ export function useWebRTC(socket, isConnected) {
         if (peerConnection) {
           await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
           
+          // Add pending ICE candidates
           pendingCandidatesRef.current.forEach(async (candidate) => {
             await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
           });
           pendingCandidatesRef.current = [];
+          setCallState('connected');
         }
       } catch (error) {
         console.error('❌ Error handling answer:', error);
       }
     };
 
-    // Receive ICE candidate
     const handleIceCandidate = async ({ candidate }) => {
       console.log('📥 Received ICE candidate');
       try {
@@ -274,7 +285,6 @@ export function useWebRTC(socket, isConnected) {
       }
     };
 
-    // Register all event listeners
     socket.on('call:incoming', handleIncomingCall);
     socket.on('call:accepted', handleCallAccepted);
     socket.on('call:rejected', handleCallRejected);
@@ -283,7 +293,6 @@ export function useWebRTC(socket, isConnected) {
     socket.on('webrtc:answer', handleAnswer);
     socket.on('webrtc:ice-candidate', handleIceCandidate);
 
-    // Cleanup function
     return () => {
       console.log('🧹 Cleaning up WebRTC socket listeners');
       socket.off('call:incoming', handleIncomingCall);
@@ -295,6 +304,21 @@ export function useWebRTC(socket, isConnected) {
       socket.off('webrtc:ice-candidate', handleIceCandidate);
     };
   }, [socket, endCall]);
+
+  // Function to update local stream (for camera switching)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.updateLocalStream = (newStream) => {
+        setLocalStream(newStream);
+        localStreamRef.current = newStream;
+      };
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        delete window.updateLocalStream;
+      }
+    };
+  }, []);
 
   return {
     localStream,

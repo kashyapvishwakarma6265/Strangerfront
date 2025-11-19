@@ -143,6 +143,10 @@ export default function CallModal({
 
         // Get new stream with specific camera
         const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+        // Stop the new audio track to avoid duplication/leak
+        newStream.getAudioTracks().forEach(track => track.stop());
+
         const newVideoTrack = newStream.getVideoTracks()[0];
         const audioTracks = localStream.getAudioTracks();
 
@@ -203,6 +207,10 @@ export default function CallModal({
         };
 
         const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+        // Stop the new audio track to avoid duplication/leak
+        newStream.getAudioTracks().forEach(track => track.stop());
+
         const newTrack = newStream.getVideoTracks()[0];
         const audioTracks = localStream.getAudioTracks();
 
@@ -310,7 +318,7 @@ export default function CallModal({
     );
   }
 
-  // VIDEO CALL - NO MIRROR EFFECT + CAMERA SWITCHING
+  // VIDEO CALL - MIRROR EFFECT FOR FRONT CAMERA + CAMERA SWITCHING
   if (inCall && callType === 'video') {
     return (
       <div className="fixed inset-0 bg-black flex flex-col z-50">
@@ -322,6 +330,7 @@ export default function CallModal({
               autoPlay
               playsInline
               className="w-full h-full object-cover"
+              style={{ transform: 'scaleX(1)' }} // No mirror for remote
             />
           ) : (
             <div className="w-full h-full bg-gradient-to-br from-gray-900 to-black flex flex-col items-center justify-center">
@@ -349,7 +358,7 @@ export default function CallModal({
             </div>
           </div>
 
-          {/* Local Preview (PIP) - No mirror effect */}
+          {/* Local Preview (PIP) - Mirror for front camera */}
           <div className="absolute bottom-24 right-2 w-24 h-32 sm:w-32 sm:h-44 bg-black rounded-xl sm:rounded-2xl overflow-hidden shadow-2xl border border-white/20">
             <video
               ref={localVideoRef}
@@ -357,7 +366,7 @@ export default function CallModal({
               playsInline
               muted
               className="w-full h-full object-cover"
-              style={{ transform: 'scaleX(1)' }} // Remove mirror effect
+              style={{ transform: isFrontCamera ? 'scaleX(-1)' : 'scaleX(1)' }} // Mirror for front, no mirror for back
             />
             <div className="absolute top-2 left-2 flex items-center gap-1 bg-black/60 rounded-full px-2 py-1">
               <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
