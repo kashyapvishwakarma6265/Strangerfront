@@ -30,6 +30,8 @@ export default function CallModal({
 }) {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
+  const remoteAudioRef = useRef(null);
+  
   const [callDuration, setCallDuration] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
@@ -39,24 +41,29 @@ export default function CallModal({
   const [availableCameras, setAvailableCameras] = useState([]);
   const [currentCameraIndex, setCurrentCameraIndex] = useState(0);
   const [orientation, setOrientation] = useState('portrait');
+  const [windowSize, setWindowSize] = useState({ width: 0, height: 0 });
 
-  // Detect device orientation
+  // Detect orientation and window size
   useEffect(() => {
-    const checkOrientation = () => {
+    const updateDimensions = () => {
+      setWindowSize({
+        width: window.innerWidth,
+        height: window.innerHeight
+      });
       setOrientation(window.innerHeight > window.innerWidth ? 'portrait' : 'landscape');
     };
 
-    checkOrientation();
-    window.addEventListener('resize', checkOrientation);
-    window.addEventListener('orientationchange', checkOrientation);
+    updateDimensions();
+    window.addEventListener('resize', updateDimensions);
+    window.addEventListener('orientationchange', updateDimensions);
 
     return () => {
-      window.removeEventListener('resize', checkOrientation);
-      window.removeEventListener('orientationchange', checkOrientation);
+      window.removeEventListener('resize', updateDimensions);
+      window.removeEventListener('orientationchange', updateDimensions);
     };
   }, []);
 
-  // Get available cameras
+  // Camera enumeration
   useEffect(() => {
     const getCameras = async () => {
       try {
@@ -78,38 +85,53 @@ export default function CallModal({
 
   // Attach local stream
   useEffect(() => {
-    if (localVideoRef.current && localStream) {
+    if (localVideoRef.current && localStream && callType === 'video') {
+      console.log('🎥 Attaching local video stream');
       localVideoRef.current.srcObject = localStream;
       localVideoRef.current.muted = true;
-      localVideoRef.current.autoplay = true;
-      localVideoRef.current.playsInline = true;
-      
-      localVideoRef.current.play().catch((err) => {
-        console.error('❌ Local video play error:', err);
-      });
+      localVideoRef.current.play().catch(console.error);
     }
-  }, [localStream]);
+  }, [localStream, callType]);
 
-  // Attach remote stream
+  // Attach remote stream to VIDEO element
   useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
+    if (remoteVideoRef.current && remoteStream && callType === 'video') {
+      console.log('📹 Attaching remote video stream');
+      
       remoteVideoRef.current.srcObject = remoteStream;
-      remoteVideoRef.current.muted = false;
       remoteVideoRef.current.autoplay = true;
       remoteVideoRef.current.playsInline = true;
       
-      const playRemote = () => {
-        remoteVideoRef.current?.play().catch((err) => {
-          console.error('❌ Remote video play error:', err);
-          setTimeout(playRemote, 500);
-        });
+      remoteVideoRef.current.play().catch((err) => {
+        console.error('❌ Remote video play error:', err);
+      });
+    }
+  }, [remoteStream, callType]);
+
+  // Attach remote stream to AUDIO element
+  useEffect(() => {
+    if (remoteAudioRef.current && remoteStream) {
+      console.log('🔊 Attaching remote audio stream');
+      
+      remoteAudioRef.current.srcObject = remoteStream;
+      remoteAudioRef.current.autoplay = true;
+      remoteAudioRef.current.muted = false;
+      
+      const playAudio = async () => {
+        try {
+          await remoteAudioRef.current.play();
+          console.log('✅ Remote audio playing');
+        } catch (err) {
+          console.error('❌ Remote audio play error:', err);
+          setTimeout(playAudio, 500);
+        }
       };
       
-      playRemote();
+      playAudio();
     }
   }, [remoteStream]);
 
-  // Monitor remote video tracks
+  // Monitor remote tracks
   useEffect(() => {
     if (!remoteStream || !inCall) {
       setRemoteVideoEnabled(true);
@@ -118,9 +140,12 @@ export default function CallModal({
 
     const checkTracks = () => {
       const videoTracks = remoteStream.getVideoTracks();
+      const audioTracks = remoteStream.getAudioTracks();
+      
       const hasActiveVideo = videoTracks.some(
         (track) => track.enabled && track.readyState === 'live'
       );
+      
       setRemoteVideoEnabled(hasActiveVideo);
     };
 
@@ -130,7 +155,7 @@ export default function CallModal({
     return () => clearInterval(interval);
   }, [remoteStream, inCall]);
 
-  // Call duration timer
+  // Timer
   useEffect(() => {
     if (!inCall) {
       setCallDuration(0);
@@ -167,9 +192,15 @@ export default function CallModal({
   };
 
   const toggleSpeaker = () => {
-    setIsSpeakerOn(!isSpeakerOn);
-    if (remoteVideoRef.current) {
-      remoteVideoRef.current.muted = !remoteVideoRef.current.muted;
+    const newSpeakerState = !isSpeakerOn;
+    setIsSpeakerOn(newSpeakerState);
+    
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.muted = !newSpeakerState;
+    }
+    
+    if (remoteVideoRef.current && callType === 'video') {
+      remoteVideoRef.current.muted = !newSpeakerState;
     }
   };
 
@@ -209,56 +240,79 @@ export default function CallModal({
     }
   };
 
-  // Responsive dimensions based on orientation
-  const getVideoLayout = () => {
+  // Responsive layout calculations
+  const getResponsiveStyles = () => {
+    const isSmallScreen = windowSize.width < 640;
+    const isTablet = windowSize.width >= 640 && windowSize.width < 1024;
+    
     if (orientation === 'landscape') {
       return {
         container: 'flex-row',
-        remote: 'flex-1',
-        local: 'w-1/3 max-w-xs absolute bottom-4 right-4 rounded-xl overflow-hidden shadow-2xl border-2 border-white/20',
-        localVideo: 'w-full h-32 object-cover transform scale-x-[-1]',
+        remoteVideo: 'flex-1',
+        localVideo: isSmallScreen 
+          ? 'w-1/4 h-32 absolute bottom-4 right-4 rounded-lg' 
+          : 'w-1/4 h-40 absolute bottom-6 right-6 rounded-xl',
+        controls: {
+          container: 'p-4 pb-6',
+          buttonSize: isSmallScreen ? 'w-12 h-12' : 'w-14 h-14',
+          hangupSize: isSmallScreen ? 'w-14 h-14' : 'w-16 h-16',
+          iconSize: isSmallScreen ? 'w-5 h-5' : 'w-6 h-6',
+          gap: 'gap-3'
+        },
+        statusBar: 'p-3',
+        userInfo: 'text-base'
       };
     }
     
-    // Portrait mode (default)
+    // Portrait mode
     return {
       container: 'flex-col',
-      remote: 'flex-1',
-      local: 'absolute bottom-20 right-4 w-24 h-32 rounded-lg overflow-hidden shadow-2xl border-2 border-white/20',
-      localVideo: 'w-full h-full object-cover transform scale-x-[-1]',
+      remoteVideo: 'flex-1',
+      localVideo: isSmallScreen 
+        ? 'w-24 h-32 absolute bottom-20 right-4 rounded-lg'
+        : 'w-32 h-40 absolute bottom-24 right-6 rounded-xl',
+      controls: {
+        container: isSmallScreen ? 'p-4 pb-5' : 'p-6 pb-8',
+        buttonSize: isSmallScreen ? 'w-14 h-14' : 'w-16 h-16',
+        hangupSize: isSmallScreen ? 'w-16 h-16' : 'w-20 h-20',
+        iconSize: isSmallScreen ? 'w-6 h-6' : 'w-7 h-7',
+        gap: 'gap-4'
+      },
+      statusBar: isSmallScreen ? 'p-3' : 'p-4',
+      userInfo: isSmallScreen ? 'text-sm' : 'text-base'
     };
   };
 
-  const layout = getVideoLayout();
+  const styles = getResponsiveStyles();
 
   // INCOMING CALL UI - Responsive
   if (isIncoming && !inCall) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 safe-area-bottom">
         <div className="w-full max-w-sm mx-auto p-6 bg-gradient-to-br from-purple-900 to-indigo-900 rounded-2xl shadow-2xl text-center">
           <div className="mb-6">
-            <div className="w-20 h-20 mx-auto mb-4 bg-white/10 rounded-full flex items-center justify-center backdrop-blur-lg">
-              <User className="w-10 h-10 text-white" />
+            <div className={`${windowSize.width < 640 ? 'w-20 h-20' : 'w-24 h-24'} mx-auto mb-4 bg-white/10 rounded-full flex items-center justify-center backdrop-blur-lg`}>
+              <User className={`${windowSize.width < 640 ? 'w-10 h-10' : 'w-12 h-12'} text-white`} />
             </div>
-            <h2 className="text-xl font-bold text-white mb-2">
+            <h2 className={`${windowSize.width < 640 ? 'text-xl' : 'text-2xl'} font-bold text-white mb-2`}>
               {callType === 'video' ? '📹 Video Call' : '📞 Voice Call'}
             </h2>
-            <p className="text-lg text-purple-200 font-medium">{callerName}</p>
-            <p className="text-sm text-purple-300 mt-2">is calling you...</p>
+            <p className={`${windowSize.width < 640 ? 'text-base' : 'text-lg'} text-purple-200 font-medium`}>{callerName}</p>
+            <p className={`${windowSize.width < 640 ? 'text-xs' : 'text-sm'} text-purple-300 mt-2`}>is calling you...</p>
           </div>
 
           <div className="flex gap-4 justify-center mt-8">
             <button
               onClick={onReject}
-              className="w-14 h-14 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-xl transition-all active:scale-95"
+              className={`${windowSize.width < 640 ? 'w-14 h-14' : 'w-16 h-16'} bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-xl transition-all active:scale-95`}
             >
-              <X className="w-6 h-6 text-white" />
+              <X className={`${windowSize.width < 640 ? 'w-6 h-6' : 'w-7 h-7'} text-white`} />
             </button>
             <button
               onClick={onAccept}
-              className="w-14 h-14 bg-green-500 hover:bg-green-600 rounded-full flex items-center justify-center shadow-xl transition-all active:scale-95 animate-pulse"
+              className={`${windowSize.width < 640 ? 'w-14 h-14' : 'w-16 h-16'} bg-green-500 hover:bg-green-600 rounded-full flex items-center justify-center shadow-xl transition-all active:scale-95 animate-pulse`}
             >
-              <Phone className="w-6 h-6 text-white" />
+              <Phone className={`${windowSize.width < 640 ? 'w-6 h-6' : 'w-7 h-7'} text-white`} />
             </button>
           </div>
         </div>
@@ -266,15 +320,18 @@ export default function CallModal({
     );
   }
 
-  // ACTIVE CALL UI - Responsive layout
+  // ACTIVE CALL UI - Responsive
   if (inCall || (!isIncoming && localStream)) {
     return (
-      <div className="fixed inset-0 z-50 bg-black flex">
-        {/* Main video area */}
-        <div className={`flex-1 flex ${layout.container} relative`}>
+      <div className="fixed inset-0 z-50 bg-black flex safe-area-bottom">
+        {/* Hidden audio element */}
+        <audio ref={remoteAudioRef} autoPlay playsInline />
+        
+        {/* Main video container */}
+        <div className={`flex-1 flex ${styles.container} relative`}>
           
-          {/* Remote Video - Main area */}
-          <div className={`${layout.remote} relative bg-gray-900`}>
+          {/* Remote Video Area */}
+          <div className={`${styles.remoteVideo} relative bg-gray-900`}>
             {callType === 'video' ? (
               remoteVideoEnabled && remoteStream ? (
                 <>
@@ -285,34 +342,38 @@ export default function CallModal({
                     className="w-full h-full object-cover"
                   />
                   <div className="absolute top-3 left-3 px-3 py-1 bg-black/60 rounded-full">
-                    <span className="text-white text-sm font-medium">{callerName}</span>
+                    <span className={`text-white ${styles.userInfo} font-medium`}>{callerName}</span>
                   </div>
                 </>
               ) : (
                 <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-gray-900 to-gray-800">
-                  <CameraOff className="w-12 h-12 text-gray-500 mb-3" />
-                  <p className="text-gray-400 text-sm px-4 text-center">{callerName}'s camera is off</p>
+                  <CameraOff className={`${windowSize.width < 640 ? 'w-12 h-12' : 'w-16 h-16'} text-gray-500 mb-3`} />
+                  <p className="text-gray-400 text-sm text-center px-4">{callerName}'s camera is off</p>
                 </div>
               )
             ) : (
+              // Voice call display
               <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-purple-900 to-indigo-900">
-                <User className="w-16 h-16 text-white/30 mb-4" />
-                <p className="text-white/70 text-base font-medium">{callerName}</p>
-                <p className="text-white/50 text-xs mt-2">Voice Call</p>
+                <User className={`${windowSize.width < 640 ? 'w-16 h-16' : 'w-24 h-24'} text-white/30 mb-4`} />
+                <p className="text-white/70 text-lg font-medium">{callerName}</p>
+                <p className="text-white/50 text-sm mt-2">🔊 Voice Call</p>
+                {remoteStream && (
+                  <p className="text-green-400 text-xs mt-4">✓ Connected</p>
+                )}
               </div>
             )}
           </div>
 
-          {/* Local Video - Picture-in-picture */}
+          {/* Local Video PIP */}
           {callType === 'video' && localStream && (
-            <div className={layout.local}>
+            <div className={`${styles.localVideo} overflow-hidden shadow-2xl border-2 border-white/20 bg-black`}>
               {isVideoEnabled ? (
                 <video
                   ref={localVideoRef}
                   autoPlay
                   playsInline
                   muted
-                  className={layout.localVideo}
+                  className="w-full h-full object-cover transform scale-x-[-1]"
                 />
               ) : (
                 <div className="w-full h-full bg-gray-800 flex items-center justify-center">
@@ -326,8 +387,8 @@ export default function CallModal({
           )}
         </div>
 
-        {/* Top Status Bar */}
-        <div className="absolute top-0 left-0 right-0 p-3 bg-gradient-to-b from-black/80 to-transparent pointer-events-none">
+        {/* Status Bar */}
+        <div className={`absolute top-0 left-0 right-0 ${styles.statusBar} bg-gradient-to-b from-black/80 to-transparent pointer-events-none`}>
           <div className="flex items-center justify-center gap-2">
             <Clock className="w-4 h-4 text-white" />
             <span className="text-white text-sm font-semibold">
@@ -336,29 +397,36 @@ export default function CallModal({
           </div>
         </div>
 
-        {/* Bottom Controls - Responsive sizing */}
-        <div className={`absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/95 via-black/80 to-transparent ${
-          orientation === 'landscape' ? 'pb-6' : 'pb-4'
-        }`}>
-          <div className={`flex items-center justify-center gap-2 ${
-            orientation === 'landscape' ? 'gap-3' : 'gap-2'
-          }`}>
+        {/* Voice call local user display */}
+        {callType === 'voice' && (
+          <div className="absolute bottom-24 left-4 bg-black/60 rounded-xl p-3 backdrop-blur-sm">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-gray-600 rounded-full flex items-center justify-center">
+                <User className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <p className="text-white text-sm font-medium">You</p>
+                <p className="text-green-400 text-xs">{isMuted ? '🔇 Muted' : '🎤 Speaking...'}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Control Bar */}
+        <div className={`absolute bottom-0 left-0 right-0 ${styles.controls.container} bg-gradient-to-t from-black/95 via-black/80 to-transparent`}>
+          <div className={`flex items-center justify-center ${styles.controls.gap}`}>
             
-            {/* Mute */}
+            {/* Mute Button */}
             <button
               onClick={toggleMute}
-              className={`rounded-full flex items-center justify-center shadow-xl transition-all active:scale-95 ${
-                orientation === 'landscape' 
-                  ? 'w-12 h-12' 
-                  : 'w-14 h-14'
-              } ${
+              className={`${styles.controls.buttonSize} rounded-full flex items-center justify-center shadow-xl transition-all active:scale-95 ${
                 isMuted ? 'bg-red-500 hover:bg-red-600' : 'bg-white/20 hover:bg-white/30 backdrop-blur-sm'
               }`}
             >
               {isMuted ? (
-                <MicOff className={orientation === 'landscape' ? "w-5 h-5 text-white" : "w-6 h-6 text-white"} />
+                <MicOff className={`${styles.controls.iconSize} text-white`} />
               ) : (
-                <Mic className={orientation === 'landscape' ? "w-5 h-5 text-white" : "w-6 h-6 text-white"} />
+                <Mic className={`${styles.controls.iconSize} text-white`} />
               )}
             </button>
 
@@ -366,85 +434,58 @@ export default function CallModal({
             {callType === 'video' && (
               <button
                 onClick={toggleVideo}
-                className={`rounded-full flex items-center justify-center shadow-xl transition-all active:scale-95 ${
-                  orientation === 'landscape' 
-                    ? 'w-12 h-12' 
-                    : 'w-14 h-14'
-                } ${
+                className={`${styles.controls.buttonSize} rounded-full flex items-center justify-center shadow-xl transition-all active:scale-95 ${
                   !isVideoEnabled ? 'bg-red-500 hover:bg-red-600' : 'bg-white/20 hover:bg-white/30 backdrop-blur-sm'
                 }`}
               >
                 {isVideoEnabled ? (
-                  <VideoIcon className={orientation === 'landscape' ? "w-5 h-5 text-white" : "w-6 h-6 text-white"} />
+                  <VideoIcon className={`${styles.controls.iconSize} text-white`} />
                 ) : (
-                  <VideoOff className={orientation === 'landscape' ? "w-5 h-5 text-white" : "w-6 h-6 text-white"} />
+                  <VideoOff className={`${styles.controls.iconSize} text-white`} />
                 )}
               </button>
             )}
 
-            {/* Hang Up - Central and larger */}
+            {/* Hang Up Button */}
             <button
               onClick={onHangup}
-              className={`bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-2xl transition-all active:scale-95 ${
-                orientation === 'landscape' 
-                  ? 'w-14 h-14 mx-2' 
-                  : 'w-16 h-16 mx-1'
-              }`}
+              className={`${styles.controls.hangupSize} bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-2xl transition-all active:scale-95 mx-2`}
             >
-              <Phone className={orientation === 'landscape' ? "w-6 h-6 text-white transform rotate-[135deg]" : "w-7 h-7 text-white transform rotate-[135deg]"} />
+              <Phone className={`${styles.controls.iconSize} text-white transform rotate-[135deg]`} />
             </button>
 
-            {/* Speaker */}
+            {/* Speaker Button */}
             <button
               onClick={toggleSpeaker}
-              className={`rounded-full flex items-center justify-center shadow-xl transition-all active:scale-95 ${
-                orientation === 'landscape' 
-                  ? 'w-12 h-12' 
-                  : 'w-14 h-14'
-              } ${
+              className={`${styles.controls.buttonSize} rounded-full flex items-center justify-center shadow-xl transition-all active:scale-95 ${
                 isSpeakerOn ? 'bg-white/20 hover:bg-white/30 backdrop-blur-sm' : 'bg-red-500 hover:bg-red-600'
               }`}
             >
               {isSpeakerOn ? (
-                <Volume2 className={orientation === 'landscape' ? "w-5 h-5 text-white" : "w-6 h-6 text-white"} />
+                <Volume2 className={`${styles.controls.iconSize} text-white`} />
               ) : (
-                <VolumeX className={orientation === 'landscape' ? "w-5 h-5 text-white" : "w-6 h-6 text-white"} />
+                <VolumeX className={`${styles.controls.iconSize} text-white`} />
               )}
             </button>
 
-            {/* Switch Camera */}
+            {/* Camera Switch */}
             {callType === 'video' && availableCameras.length > 1 && (
               <button
                 onClick={switchCamera}
-                className={`rounded-full flex items-center justify-center shadow-xl transition-all active:scale-95 ${
-                  orientation === 'landscape' 
-                    ? 'w-12 h-12' 
-                    : 'w-14 h-14'
-                } bg-white/20 hover:bg-white/30 backdrop-blur-sm`}
+                className={`${styles.controls.buttonSize} bg-white/20 hover:bg-white/30 backdrop-blur-sm rounded-full flex items-center justify-center shadow-xl transition-all active:scale-95`}
               >
-                <RotateCcw className={orientation === 'landscape' ? "w-5 h-5 text-white" : "w-6 h-6 text-white"} />
+                <RotateCcw className={`${styles.controls.iconSize} text-white`} />
               </button>
             )}
           </div>
 
-          {/* Camera info */}
+          {/* Camera info for video calls */}
           {callType === 'video' && availableCameras.length > 0 && (
             <p className="text-center text-white/60 text-xs mt-3">
               {isFrontCamera ? '📱 Front Camera' : '📷 Back Camera'}
             </p>
           )}
         </div>
-
-        {/* Voice call user info for video calls */}
-        {callType === 'voice' && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="text-center bg-black/30 rounded-2xl p-6 backdrop-blur-sm">
-              <User className="w-20 h-20 text-white/40 mx-auto mb-4" />
-              <p className="text-white text-xl font-semibold">{callerName}</p>
-              <p className="text-white/60 text-sm mt-2">Voice Call</p>
-            </div>
-          </div>
-        )}
       </div>
     );
   }
