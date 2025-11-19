@@ -23,15 +23,12 @@ export function useWebRTC(socket, isConnected) {
   const peerConnectionRef = useRef(null);
   const pendingCandidatesRef = useRef([]);
   const localStreamRef = useRef(null);
-  const remoteStreamRef = useRef(null);
 
   const createPeerConnection = useCallback(() => {
     if (peerConnectionRef.current) {
-      console.log('⚠️ Peer connection already exists');
       return peerConnectionRef.current;
     }
 
-    console.log('🔧 Creating new RTCPeerConnection');
     const peerConnection = new RTCPeerConnection(ICE_SERVERS);
     peerConnectionRef.current = peerConnection;
 
@@ -39,7 +36,6 @@ export function useWebRTC(socket, isConnected) {
       window.currentPeerConnection = peerConnection;
     }
 
-    // ICE Candidate handler
     peerConnection.onicecandidate = (event) => {
       if (event.candidate && socket) {
         console.log('📡 Sending ICE candidate');
@@ -47,129 +43,75 @@ export function useWebRTC(socket, isConnected) {
       }
     };
 
-    // CRITICAL: Track handler for receiving remote media
+    // FIXED: Properly handle remote tracks
     peerConnection.ontrack = (event) => {
-      console.log('📹 ontrack fired! Track:', event.track.kind, event.track.id);
-      console.log('Track details:', {
-        kind: event.track.kind,
-        enabled: event.track.enabled,
-        readyState: event.track.readyState,
-        muted: event.track.muted,
-      });
-
+      console.log('📹 Received remote track:', event.track.kind);
       if (event.streams && event.streams[0]) {
-        const stream = event.streams[0];
-        console.log('✅ Remote stream received:', stream.id);
-        console.log('Stream tracks:', stream.getTracks().map(t => `${t.kind}:${t.id}`));
-        
-        remoteStreamRef.current = stream;
-        setRemoteStream(stream);
-
-        // CRITICAL: For audio-only calls, play audio immediately
-        if (event.track.kind === 'audio') {
-          console.log('🔊 Audio track received, preparing playback');
-        }
+        console.log('📹 Setting remote stream with tracks:', event.streams[0].getTracks().length);
+        setRemoteStream(event.streams[0]);
       }
     };
 
-    // Connection state changes
     peerConnection.onconnectionstatechange = () => {
       console.log('🔗 Connection state:', peerConnection.connectionState);
-      
       if (peerConnection.connectionState === 'connected') {
-        console.log('✅ Peer connection established');
         setCallState('connected');
-      } else if (['disconnected', 'failed', 'closed'].includes(peerConnection.connectionState)) {
-        console.log('❌ Connection lost');
+      } else if (
+        peerConnection.connectionState === 'disconnected' ||
+        peerConnection.connectionState === 'failed' ||
+        peerConnection.connectionState === 'closed'
+      ) {
         endCall();
       }
     };
 
     peerConnection.oniceconnectionstatechange = () => {
-      console.log('🧊 ICE state:', peerConnection.iceConnectionState);
-    };
-
-    peerConnection.onsignalingstatechange = () => {
-      console.log('📶 Signaling state:', peerConnection.signalingState);
+      console.log('🧊 ICE Connection state:', peerConnection.iceConnectionState);
     };
 
     return peerConnection;
   }, [socket]);
 
-  // CRITICAL: Enhanced stream acquisition with proper audio constraints
   const startLocalStream = useCallback(async (isVideo = true) => {
     try {
-      console.log(`🎥 Starting ${isVideo ? 'video+audio' : 'audio-only'} stream...`);
-
       const constraints = {
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
-          // CRITICAL: Ensure audio is always captured
-          channelCount: 1,
-          sampleRate: 48000,
-          sampleSize: 16,
         },
         video: isVideo
           ? {
+              facingMode: { ideal: 'user' }, // Front by default
               width: { ideal: 1280, max: 1920 },
               height: { ideal: 720, max: 1080 },
-              facingMode: 'user',
-              frameRate: { ideal: 30 },
             }
           : false,
       };
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      
-      console.log('✅ Local stream obtained:', stream.id);
-      console.log('📊 Stream tracks:');
-      stream.getTracks().forEach((track) => {
-        console.log(`  ✓ ${track.kind}: ${track.label} (enabled: ${track.enabled}, muted: ${track.muted})`);
-      });
-
-      // CRITICAL: Verify audio track exists and is active
-      const audioTracks = stream.getAudioTracks();
-      if (audioTracks.length === 0) {
-        throw new Error('No audio track obtained from getUserMedia');
-      }
-
-      console.log('🔊 Audio track verified:', audioTracks[0].label);
+      console.log('🎥 Local stream started with tracks:', stream.getTracks().length);
 
       setLocalStream(stream);
       localStreamRef.current = stream;
-      
       return stream;
     } catch (error) {
       console.error('❌ Error accessing media devices:', error);
-      
-      if (error.name === 'NotAllowedError') {
-        alert('Microphone/Camera permission denied. Please allow access in browser settings.');
-      } else if (error.name === 'NotFoundError') {
-        alert('No microphone/camera found. Please connect a device.');
-      } else {
-        alert(`Media access error: ${error.message}`);
-      }
-      
+      alert('Could not access camera/microphone. Please grant permissions.');
       throw error;
     }
   }, []);
 
   const endCall = useCallback(() => {
-    console.log('📴 Ending call...');
+    console.log('📴 Ending call');
 
     if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => {
-        track.stop();
-        console.log(`🛑 Stopped ${track.kind} track`);
-      });
+      localStreamRef.current.getTracks().forEach((track) => track.stop());
     }
 
     if (peerConnectionRef.current) {
       peerConnectionRef.current.close();
       peerConnectionRef.current = null;
-      
       if (typeof window !== 'undefined') {
         window.currentPeerConnection = null;
       }
@@ -187,52 +129,33 @@ export function useWebRTC(socket, isConnected) {
     setRemotePeerId(null);
     pendingCandidatesRef.current = [];
     localStreamRef.current = null;
-    remoteStreamRef.current = null;
-
-    console.log('✅ Call ended and cleaned up');
   }, [socket, callState]);
 
   const initiateCall = useCallback(
     async (type = 'video') => {
       if (!socket || !isConnected) {
         console.error('❌ Socket not connected');
-        alert('Not connected to server. Please wait...');
         return;
       }
 
       try {
-        console.log(`📞 Initiating ${type} call...`);
+        console.log(`📞 Initiating ${type} call`);
         setCallType(type);
         setCallState('calling');
         setIsIncoming(false);
 
-        // Get local stream (audio for voice call, audio+video for video call)
         const stream = await startLocalStream(type === 'video');
-        
-        // Create peer connection
         const peerConnection = createPeerConnection();
 
-        // CRITICAL: Add each track individually with proper stream association
+        // FIXED: Add tracks properly
         stream.getTracks().forEach((track) => {
-          console.log(`➕ Adding ${track.kind} track to peer connection`);
-          const sender = peerConnection.addTrack(track, stream);
-          console.log(`✅ Sender created:`, sender);
+          console.log(`Adding ${track.kind} track to peer connection`);
+          peerConnection.addTrack(track, stream);
         });
 
-        // Verify senders
-        const senders = peerConnection.getSenders();
-        console.log(`📡 Total senders: ${senders.length}`);
-        senders.forEach((sender, index) => {
-          console.log(`  Sender ${index}: ${sender.track?.kind}`);
-        });
-
-        // Notify remote peer
         socket.emit('call:initiate', { callType: type });
-        console.log('📤 Call initiate signal sent');
-        
       } catch (error) {
         console.error('❌ Error initiating call:', error);
-        alert('Failed to start call: ' + error.message);
         setCallState('idle');
       }
     },
@@ -246,57 +169,44 @@ export function useWebRTC(socket, isConnected) {
     }
 
     try {
-      console.log('✅ Accepting call from:', remotePeerId);
+      console.log('✅ Accepting call');
       setCallState('connecting');
 
-      // Get local stream
       const stream = await startLocalStream(callType === 'video');
-      
-      // Create peer connection
       const peerConnection = createPeerConnection();
 
-      // CRITICAL: Add tracks to peer connection
+      // FIXED: Add tracks properly
       stream.getTracks().forEach((track) => {
-        console.log(`➕ Adding ${track.kind} track to peer connection`);
-        const sender = peerConnection.addTrack(track, stream);
-        console.log(`✅ Sender created:`, sender);
+        console.log(`Adding ${track.kind} track to peer connection`);
+        peerConnection.addTrack(track, stream);
       });
 
-      // Verify senders
-      const senders = peerConnection.getSenders();
-      console.log(`📡 Total senders: ${senders.length}`);
-
-      // Notify caller
       socket.emit('call:accept', { to: remotePeerId });
-      console.log('📤 Call accept signal sent');
-      
     } catch (error) {
       console.error('❌ Error accepting call:', error);
-      alert('Failed to accept call: ' + error.message);
       rejectCall();
     }
   }, [socket, remotePeerId, callType, startLocalStream, createPeerConnection]);
 
   const rejectCall = useCallback(() => {
     console.log('❌ Rejecting call');
-    
     if (socket && remotePeerId) {
       socket.emit('call:reject', { to: remotePeerId });
     }
-    
     endCall();
   }, [socket, remotePeerId, endCall]);
 
   // Socket event listeners
   useEffect(() => {
     if (!socket || typeof socket.on !== 'function') {
+      console.log('⚠️ Socket not available yet');
       return;
     }
 
-    console.log('🔌 Setting up WebRTC socket listeners');
+    console.log('✅ Setting up WebRTC socket listeners');
 
     const handleIncomingCall = async ({ callType: type, from }) => {
-      console.log(`📞 Incoming ${type} call from:`, from);
+      console.log(`📞 Incoming ${type} call from ${from}`);
       setCallType(type);
       setCallState('ringing');
       setIsIncoming(true);
@@ -304,34 +214,20 @@ export function useWebRTC(socket, isConnected) {
     };
 
     const handleCallAccepted = async ({ from }) => {
-      console.log('✅ Call accepted by:', from);
+      console.log('✅ Call accepted by', from);
       setRemotePeerId(from);
       setCallState('connecting');
 
       try {
         const peerConnection = peerConnectionRef.current;
-        
-        if (!peerConnection) {
-          throw new Error('Peer connection not initialized');
+        if (peerConnection) {
+          const offer = await peerConnection.createOffer();
+          await peerConnection.setLocalDescription(offer);
+          console.log('📤 Sending offer');
+          socket.emit('webrtc:offer', { offer });
         }
-
-        console.log('📝 Creating offer...');
-        
-        // CRITICAL: Explicitly request audio and video in offer
-        const offer = await peerConnection.createOffer({
-          offerToReceiveAudio: true,
-          offerToReceiveVideo: callType === 'video',
-        });
-
-        console.log('📝 Setting local description...');
-        await peerConnection.setLocalDescription(offer);
-
-        console.log('📤 Sending offer');
-        socket.emit('webrtc:offer', { offer });
-        
       } catch (error) {
         console.error('❌ Error creating offer:', error);
-        endCall();
       }
     };
 
@@ -347,43 +243,27 @@ export function useWebRTC(socket, isConnected) {
     };
 
     const handleOffer = async ({ offer, from }) => {
-      console.log('📥 Received offer from:', from);
+      console.log('📥 Received offer from', from);
 
       try {
         const peerConnection = peerConnectionRef.current;
-        
-        if (!peerConnection) {
-          throw new Error('Peer connection not initialized');
-        }
+        if (peerConnection) {
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
 
-        console.log('📝 Setting remote description (offer)...');
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-
-        // Process pending ICE candidates
-        if (pendingCandidatesRef.current.length > 0) {
-          console.log(`📡 Adding ${pendingCandidatesRef.current.length} pending ICE candidates`);
-          
-          for (const candidate of pendingCandidatesRef.current) {
+          // Add pending ICE candidates
+          pendingCandidatesRef.current.forEach(async (candidate) => {
             await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-          }
-          
+          });
           pendingCandidatesRef.current = [];
+
+          const answer = await peerConnection.createAnswer();
+          await peerConnection.setLocalDescription(answer);
+          console.log('📤 Sending answer');
+          socket.emit('webrtc:answer', { answer, to: from });
+          setCallState('connected');
         }
-
-        console.log('📝 Creating answer...');
-        const answer = await peerConnection.createAnswer();
-
-        console.log('📝 Setting local description (answer)...');
-        await peerConnection.setLocalDescription(answer);
-
-        console.log('📤 Sending answer');
-        socket.emit('webrtc:answer', { answer, to: from });
-        
-        setCallState('connected');
-        
       } catch (error) {
         console.error('❌ Error handling offer:', error);
-        endCall();
       }
     };
 
@@ -392,31 +272,18 @@ export function useWebRTC(socket, isConnected) {
 
       try {
         const peerConnection = peerConnectionRef.current;
-        
-        if (!peerConnection) {
-          throw new Error('Peer connection not initialized');
-        }
+        if (peerConnection) {
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
 
-        console.log('📝 Setting remote description (answer)...');
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-
-        // Process pending ICE candidates
-        if (pendingCandidatesRef.current.length > 0) {
-          console.log(`📡 Adding ${pendingCandidatesRef.current.length} pending ICE candidates`);
-          
-          for (const candidate of pendingCandidatesRef.current) {
+          // Add pending ICE candidates
+          pendingCandidatesRef.current.forEach(async (candidate) => {
             await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-          }
-          
+          });
           pendingCandidatesRef.current = [];
+          setCallState('connected');
         }
-
-        setCallState('connected');
-        console.log('✅ Answer processed');
-        
       } catch (error) {
         console.error('❌ Error handling answer:', error);
-        endCall();
       }
     };
 
@@ -425,12 +292,9 @@ export function useWebRTC(socket, isConnected) {
 
       try {
         const peerConnection = peerConnectionRef.current;
-        
         if (peerConnection && peerConnection.remoteDescription) {
-          console.log('➕ Adding ICE candidate immediately');
           await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
         } else {
-          console.log('⏳ Queuing ICE candidate');
           pendingCandidatesRef.current.push(candidate);
         }
       } catch (error) {
@@ -447,7 +311,7 @@ export function useWebRTC(socket, isConnected) {
     socket.on('webrtc:ice-candidate', handleIceCandidate);
 
     return () => {
-      console.log('🧹 Cleaning up socket listeners');
+      console.log('🧹 Cleaning up WebRTC socket listeners');
       socket.off('call:incoming', handleIncomingCall);
       socket.off('call:accepted', handleCallAccepted);
       socket.off('call:rejected', handleCallRejected);
@@ -456,7 +320,23 @@ export function useWebRTC(socket, isConnected) {
       socket.off('webrtc:answer', handleAnswer);
       socket.off('webrtc:ice-candidate', handleIceCandidate);
     };
-  }, [socket, callType, endCall]);
+  }, [socket, endCall]);
+
+  // Function to update local stream (for camera switching)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.updateLocalStream = (newStream) => {
+        setLocalStream(newStream);
+        localStreamRef.current = newStream;
+      };
+    }
+
+    return () => {
+      if (typeof window !== 'undefined') {
+        delete window.updateLocalStream;
+      }
+    };
+  }, []);
 
   return {
     localStream,

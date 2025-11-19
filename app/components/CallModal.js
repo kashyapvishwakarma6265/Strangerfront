@@ -63,25 +63,39 @@ export default function CallModal({
     };
   }, []);
 
-  // Camera enumeration
+  // FIXED: Enhanced camera enumeration (runs after localStream for accurate labels on mobile)
   useEffect(() => {
+    if (!localStream) return;
+
     const getCameras = async () => {
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
         const cameras = devices.filter((device) => device.kind === 'videoinput');
+        console.log('📷 Available cameras:', cameras.map(c => ({ label: c.label || 'Unknown', deviceId: c.deviceId.substring(0, 8) + '...' })));
         setAvailableCameras(cameras);
+
+        if (cameras.length > 0) {
+          // Assume first is front on mobile; check label for accuracy
+          const firstCamera = cameras[0];
+          const isFront = firstCamera.label.toLowerCase().includes('front') || 
+                          firstCamera.label.toLowerCase().includes('face') || 
+                          firstCamera.label.toLowerCase().includes('user') ||
+                          firstCamera.label === ''; // Fallback if label empty (common on mobile pre-perms)
+          setIsFrontCamera(isFront);
+          setCurrentCameraIndex(0);
+        }
       } catch (error) {
         console.error('❌ Error getting cameras:', error);
       }
     };
 
     getCameras();
-    navigator.mediaDevices?.addEventListener('devicechange', getCameras);
 
-    return () => {
-      navigator.mediaDevices?.removeEventListener('devicechange', getCameras);
-    };
-  }, []);
+    const handleDeviceChange = () => getCameras();
+    navigator.mediaDevices?.addEventListener('devicechange', handleDeviceChange);
+
+    return () => navigator.mediaDevices?.removeEventListener('devicechange', handleDeviceChange);
+  }, [localStream]);
 
   // Attach local stream
   useEffect(() => {
@@ -204,40 +218,123 @@ export default function CallModal({
     }
   };
 
+  // FIXED: switchCamera - Use only ideal facingMode, add delay after stop, no deviceId, no alert, better scoping
   const switchCamera = async () => {
-    if (!localStream || availableCameras.length <= 1) return;
+    if (!localStream) {
+      console.warn('⚠️ Cannot switch: No local stream');
+      return;
+    }
 
+    const oldVideoTrack = localStream.getVideoTracks()[0];
+    if (!oldVideoTrack || oldVideoTrack.readyState === 'ended') {
+      console.error('❌ No active old video track to replace');
+      return;
+    }
+
+    const targetFacingMode = isFrontCamera ? 'environment' : 'user';
+    console.log(`🔄 Switching to ${targetFacingMode} mode (from ${isFrontCamera ? 'front' : 'back'})`);
+
+    // CRITICAL: Stop and remove old track FIRST with delay to release hardware
+    oldVideoTrack.stop();
+    localStream.removeTrack(oldVideoTrack);
+    console.log('🛑 Old video track stopped and removed');
+
+    // Delay to ensure hardware release (common mobile fix)
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    let newVideoTrack = null;
+    let tempStream = null;
+    let success = false;
+
+    // Layer 1: Ideal facingMode only (avoids OverconstrainedError)
     try {
-      const nextIndex = (currentCameraIndex + 1) % availableCameras.length;
-      const nextCamera = availableCameras[nextIndex];
-
-      const newStream = await navigator.mediaDevices.getUserMedia({
-        video: { deviceId: { exact: nextCamera.deviceId } },
+      tempStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: targetFacingMode } },
         audio: false,
       });
+      newVideoTrack = tempStream.getVideoTracks()[0];
+      console.log('✅ Ideal facingMode succeeded');
+      success = true;
+    } catch (error) {
+      console.warn(`⚠️ Ideal facingMode failed (${error.name}):`, error.message);
+    }
 
-      const newVideoTrack = newStream.getVideoTracks()[0];
-      const oldVideoTrack = localStream.getVideoTracks()[0];
+    // Layer 2: Fallback to no facingMode (let browser choose opposite)
+    if (!success) {
+      try {
+        tempStream = await navigator.mediaDevices.getUserMedia({
+          video: true, // No constraints, browser picks available
+          audio: false,
+        });
+        newVideoTrack = tempStream.getVideoTracks()[0];
+        // Assume toggle based on previous
+        console.log('✅ Unconstrained fallback succeeded (browser choice)');
+        success = true;
+      } catch (fallbackError) {
+        console.error('❌ Unconstrained fallback failed:', fallbackError);
+      }
+    }
 
-      if (window.currentPeerConnection) {
-        const sender = window.currentPeerConnection
-          .getSenders()
-          .find((s) => s.track?.kind === 'video');
-        
-        if (sender) {
+    if (!success || !newVideoTrack) {
+      console.error('❌ All camera switch attempts failed');
+      // Silent restore to front camera without alert
+      try {
+        console.log('🔄 Silently restoring front camera');
+        const restoreStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'user' } },
+          audio: false,
+        });
+        const restoreTrack = restoreStream.getVideoTracks()[0];
+        localStream.addTrack(restoreTrack);
+        setIsFrontCamera(true);
+        console.log('✅ Front camera restored silently');
+      } catch (restoreError) {
+        console.error('❌ Failed to restore front camera:', restoreError);
+        // If restore fails, end call or show toast (but no alert)
+      }
+      return; // Exit without alert
+    }
+
+    // Success: Add new track
+    localStream.addTrack(newVideoTrack);
+    console.log('➕ New video track added to local stream');
+
+    // Replace in peer connection
+    const peerConnection = window?.currentPeerConnection;
+    if (peerConnection) {
+      const sender = peerConnection.getSenders().find(s => s.track?.kind === 'video');
+      if (sender) {
+        try {
           await sender.replaceTrack(newVideoTrack);
+          console.log('🔄 Track replaced in peer connection');
+        } catch (replaceError) {
+          console.error('❌ replaceTrack failed:', replaceError);
         }
       }
-
-      localStream.removeTrack(oldVideoTrack);
-      localStream.addTrack(newVideoTrack);
-      oldVideoTrack.stop();
-
-      setCurrentCameraIndex(nextIndex);
-      setIsFrontCamera(nextCamera.label.toLowerCase().includes('front'));
-    } catch (error) {
-      console.error('❌ Camera switch failed:', error);
     }
+
+    // Clean up tempStream
+    if (tempStream) {
+      tempStream.getTracks().forEach(track => {
+        if (track !== newVideoTrack) track.stop();
+      });
+    }
+
+    // Update state
+    setIsFrontCamera(!isFrontCamera);
+
+    // Optional: Apply mild constraints post-switch
+    try {
+      await newVideoTrack.applyConstraints({
+        width: { ideal: 640 }, // Lower to avoid issues
+        height: { ideal: 480 },
+      });
+      console.log('📐 Mild constraints applied');
+    } catch (applyError) {
+      console.warn('⚠️ Could not apply constraints:', applyError);
+    }
+
+    console.log('✅ Camera switch complete');
   };
 
   // Responsive layout calculations
@@ -284,6 +381,9 @@ export default function CallModal({
   };
 
   const styles = getResponsiveStyles();
+
+  // FIXED: Conditionally mirror local video only for front camera
+  const localVideoMirrorClass = isFrontCamera ? 'transform scale-x-[-1]' : '';
 
   // INCOMING CALL UI - Responsive
   if (isIncoming && !inCall) {
@@ -365,7 +465,7 @@ export default function CallModal({
           </div>
 
           {/* Local Video PIP */}
-          {callType === 'video' && localStream && (
+          {callType === 'video' && localStream && localStream.getVideoTracks().length > 0 && (
             <div className={`${styles.localVideo} overflow-hidden shadow-2xl border-2 border-white/20 bg-black`}>
               {isVideoEnabled ? (
                 <video
@@ -373,7 +473,7 @@ export default function CallModal({
                   autoPlay
                   playsInline
                   muted
-                  className="w-full h-full object-cover transform scale-x-[-1]"
+                  className={`w-full h-full object-cover ${localVideoMirrorClass}`}
                 />
               ) : (
                 <div className="w-full h-full bg-gray-800 flex items-center justify-center">
@@ -468,11 +568,12 @@ export default function CallModal({
               )}
             </button>
 
-            {/* Camera Switch */}
+            {/* Camera Switch - Hide if only one camera to avoid failures */}
             {callType === 'video' && availableCameras.length > 1 && (
               <button
                 onClick={switchCamera}
                 className={`${styles.controls.buttonSize} bg-white/20 hover:bg-white/30 backdrop-blur-sm rounded-full flex items-center justify-center shadow-xl transition-all active:scale-95`}
+                title="Switch Camera"
               >
                 <RotateCcw className={`${styles.controls.iconSize} text-white`} />
               </button>
